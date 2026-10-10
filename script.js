@@ -249,3 +249,12 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   });
   setNote(); render();
 })();
+
+/* ===== Animação de entrada do topo: toca quando a seção aparece ===== */
+(() => {
+  const hero = document.getElementById('inicio');
+  if (!hero) return;
+  if (!('IntersectionObserver' in window)) { hero.classList.add('play'); return; }
+  const io = new IntersectionObserver((es) => { if (es.some(e => e.isIntersecting)) { hero.classList.add('play'); io.disconnect(); } }, { threshold: 0.12 });
+  io.observe(hero);
+})();
