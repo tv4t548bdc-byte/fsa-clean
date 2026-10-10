@@ -175,3 +175,77 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   });
   show(1);
 })();
+
+/* ===== Abas e envio de fotos/vídeos ===== */
+(() => {
+  const tabQuiz = document.getElementById('tabQuiz'), tabMedia = document.getElementById('tabMedia');
+  const pQuiz = document.getElementById('panelQuiz'), pMedia = document.getElementById('panelMedia');
+  if (!tabQuiz || !pMedia) return;
+  const activate = (media) => {
+    tabQuiz.setAttribute('aria-selected', String(!media)); tabMedia.setAttribute('aria-selected', String(media));
+    pQuiz.hidden = media; pMedia.hidden = !media;
+  };
+  tabQuiz.addEventListener('click', () => activate(false));
+  tabMedia.addEventListener('click', () => activate(true));
+
+  const WHATS = '5575981516165', MAX = 10, MAXMB = 100;
+  const input = document.getElementById('mediaInput'), grid = document.getElementById('mediaPreviews');
+  const err = document.getElementById('mediaError'), send = document.getElementById('mediaSend');
+  const label = document.getElementById('mediaSendLabel'), note = document.getElementById('mediaNote');
+  let files = [];
+  const canShareFiles = () => !!(navigator.canShare && navigator.share && files.length && navigator.canShare({ files }));
+  const setNote = () => {
+    const supported = !!(navigator.canShare && navigator.share);
+    label.textContent = supported ? 'Enviar pelo WhatsApp' : 'Abrir o WhatsApp';
+    note.textContent = supported
+      ? 'Ao tocar em enviar, escolha o WhatsApp e depois a conversa da FSA Clean para mandar os arquivos.'
+      : 'O WhatsApp abre com a sua mensagem. Depois, toque no clipe e anexe as fotos e vídeos escolhidos.';
+  };
+  const render = () => {
+    grid.textContent = '';
+    files.forEach((f, i) => {
+      const t = document.createElement('div'); t.className = 'q-thumb';
+      const url = URL.createObjectURL(f);
+      if (f.type.startsWith('video/')) {
+        const v = document.createElement('video'); v.src = url + '#t=0.1'; v.muted = true; v.playsInline = true; v.preload = 'metadata';
+        const tag = document.createElement('span'); tag.className = 'q-tag'; tag.textContent = 'Vídeo'; t.append(v, tag);
+      } else {
+        const im = document.createElement('img'); im.src = url; im.alt = 'Foto escolhida ' + (i + 1); t.append(im);
+      }
+      const x = document.createElement('button'); x.type = 'button'; x.className = 'q-x'; x.setAttribute('aria-label', 'Remover arquivo'); x.textContent = '\u00d7';
+      x.addEventListener('click', () => { URL.revokeObjectURL(url); files.splice(i, 1); render(); });
+      t.append(x); grid.append(t);
+    });
+    send.disabled = !files.length;
+  };
+  input.addEventListener('change', () => {
+    err.hidden = true; let msg = '';
+    [...input.files].forEach((f) => {
+      if (files.length >= MAX) { msg = 'Você pode enviar até ' + MAX + ' arquivos.'; return; }
+      if (f.size > MAXMB * 1048576) { msg = 'Um arquivo passou de ' + MAXMB + ' MB e não foi adicionado.'; return; }
+      if (files.some(x => x.name === f.name && x.size === f.size)) return;
+      files.push(f);
+    });
+    input.value = '';
+    if (msg) { err.textContent = msg; err.hidden = false; }
+    render();
+  });
+  const buildText = () => {
+    let m = 'Olá, FSA Clean! Estou enviando fotos e vídeos do meu estofado para orçamento.';
+    const b = (document.getElementById('qBairro')?.value || '').trim();
+    const est = [...document.querySelectorAll('#qEstofado .q-chip[aria-pressed="true"]')].map(c => c.textContent).join(', ');
+    if (b) m += '\n\u{1F4CD} Bairro: ' + b;
+    if (est) m += '\n\u{1F6CB}\uFE0F Estofado: ' + est;
+    return m;
+  };
+  send.addEventListener('click', async () => {
+    if (!files.length) return;
+    const text = buildText();
+    if (canShareFiles()) {
+      try { await navigator.share({ files, text }); return; }
+      catch (e) { if (e && e.name === 'AbortError') return; }
+    }
+    window.open('https://wa.me/' + WHATS + '?text=' + encodeURIComponent(text), '_blank', 'noopener');
+  });
+  setNote(); render();
+})();
