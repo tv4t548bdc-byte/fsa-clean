@@ -54,3 +54,5 @@
 
 .quote-section{padding:64px 0 76px}
 @media(max-width:900px){.quote-section{padding:26px 0 40px}.quote-copy p,.quote-points{display:none}.quote-copy h2{font-size:1.65rem;margin:8px 0 0}.quote-grid{gap:18px}}
+
+.q-detail h4{margin:0 0 12px;font-family:Manrope,sans-serif;font-size:1.02rem;letter-spacing:-.01em;color:var(--blue-deep)}.q-detail+.q-detail{margin-top:26px;padding-top:22px;border-top:1px solid var(--line)}
