@@ -10,10 +10,7 @@ nav?.querySelectorAll('a').forEach(link => link.addEventListener('click', () => 
 }));
 document.querySelector('#year').textContent = new Date().getFullYear();
 
-/* ===== Avaliações ===== */
-const WHATS_AVALIACAO = '5575981516165';
-/* Avaliações aprovadas aparecem aqui. Formato: { nome: 'Maria', nota: 5, texto: 'Ótimo atendimento!', servico: 'Sofá' } */
-const REVIEWS = [];
+/* ===== Avaliações (salvas no Supabase; só aparecem depois de aprovadas) ===== */
 const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excelente!'];
 (() => {
   const dlg = document.getElementById('reviewDialog');
@@ -23,7 +20,7 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   const err = document.getElementById('formError');
   const rowBtns = [...document.querySelectorAll('#starRow .star-btn')];
   const pickBtns = [...document.querySelectorAll('.rating-pick .star-btn')];
-  let rating = 0;
+  let rating = 0, sending = false;
 
   const paint = (n) => rowBtns.forEach((b, i) => b.classList.toggle('on', i < n));
   const setRating = (n) => { rating = n; paint(n); label.textContent = LABELS[n] || 'Toque nas estrelas para dar sua nota'; err.hidden = true; };
@@ -48,38 +45,48 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   document.getElementById('thanksClose').addEventListener('click', closeDlg);
   dlg.addEventListener('click', (e) => { if (e.target === dlg) closeDlg(); });
 
-  form.addEventListener('submit', (e) => {
+  form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    if (!rating) { err.hidden = false; return; }
+    if (sending) return;
+    if (!rating) { err.textContent = 'Escolha uma nota de 1 a 5 estrelas.'; err.hidden = false; return; }
+    const db = window.fsaDb && window.fsaDb();
+    if (!db) { err.textContent = 'Não foi possível enviar agora. Tente novamente mais tarde.'; err.hidden = false; return; }
     const d = new FormData(form);
-    const nome = (d.get('name') || '').toString().trim();
+    const nome = (d.get('name') || '').toString().trim() || 'Cliente';
     const serv = (d.get('service') || '').toString().trim();
     const com = (d.get('comment') || '').toString().trim();
-    let msg = 'Olá, FSA Clean! Quero deixar minha avaliação:\n' + '★'.repeat(rating) + '☆'.repeat(5 - rating) + ' (' + rating + '/5)';
-    if (nome) msg += '\nNome: ' + nome;
-    if (serv) msg += '\nServiço: ' + serv;
-    if (com) msg += '\nComentário: ' + com;
-    window.open('https://wa.me/' + WHATS_AVALIACAO + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');
-    form.hidden = true; thanks.hidden = false; form.reset();
+    const btn = form.querySelector('button[type=submit]'); sending = true; btn.disabled = true;
+    const { error } = await db.from('avaliacoes').insert({ nome: nome.slice(0, 60), nota: rating, comentario: com || null, servico: serv || null });
+    sending = false; btn.disabled = false;
+    if (error) { err.textContent = 'Não foi possível enviar sua avaliação. Tente novamente.'; err.hidden = false; return; }
+    form.hidden = true; thanks.hidden = false; form.reset(); setRating(0);
   });
 
-  /* Resumo e lista de avaliações aprovadas */
-  if (REVIEWS.length) {
-    const avg = REVIEWS.reduce((s, r) => s + r.nota, 0) / REVIEWS.length;
+  /* Resumo e lista de avaliações APROVADAS (vindas do Supabase) */
+  const render = (list) => {
+    if (!list.length) return;
+    const avg = list.reduce((s, r) => s + r.nota, 0) / list.length;
     const n = Math.round(avg);
     document.getElementById('sumStars').innerHTML = '<span class="on">' + '★'.repeat(n) + '</span>' + '★'.repeat(5 - n);
-    document.getElementById('sumTitle').textContent = avg.toFixed(1).replace('.', ',') + ' de 5 · ' + REVIEWS.length + (REVIEWS.length === 1 ? ' avaliação' : ' avaliações');
+    document.getElementById('sumTitle').textContent = avg.toFixed(1).replace('.', ',') + ' de 5 · ' + list.length + (list.length === 1 ? ' avaliação' : ' avaliações');
     document.getElementById('sumSub').textContent = 'Clientes que avaliaram a FSA Clean';
-    const list = document.getElementById('reviewList');
-    REVIEWS.forEach((r) => {
+    const box = document.getElementById('reviewList'); box.textContent = '';
+    list.forEach((r) => {
       const c = document.createElement('div'); c.className = 'review-card';
       const s = document.createElement('div'); s.className = 'rc-stars'; s.textContent = '★'.repeat(r.nota) + '☆'.repeat(5 - r.nota);
-      const p = document.createElement('p'); p.textContent = r.texto || '';
+      const p = document.createElement('p'); p.textContent = r.comentario || '';
       const sm = document.createElement('small'); sm.textContent = r.nome + (r.servico ? ' · ' + r.servico : '');
-      c.append(s, p, sm); list.append(c);
+      c.append(s); if (r.comentario) c.append(p); c.append(sm); box.append(c);
     });
-    list.hidden = false;
-  }
+    box.hidden = false;
+  };
+  window.addEventListener('load', async () => {
+    const db = window.fsaDb && window.fsaDb(); if (!db) return;
+    try {
+      const { data, error } = await db.from('avaliacoes').select('nome,nota,comentario,servico,created_at').eq('status', 'aprovada').order('created_at', { ascending: false }).limit(12);
+      if (!error && data) render(data);
+    } catch (_) { /* sem avaliações públicas por enquanto */ }
+  });
 })();
 
 /* ===== Cabeçalho, animações ao rolar ===== */
@@ -107,113 +114,43 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   els.forEach((el) => io.observe(el));
 })();
 
-/* ===== Orçamento rápido (WhatsApp) ===== */
+/* ===== Orçamento: salva no Supabase (NÃO abre o WhatsApp) ===== */
 (() => {
   const form = document.getElementById('quoteForm');
   if (!form) return;
-  const WHATS = '5575981516165';
-  const steps = [...form.querySelectorAll('.q-step')];
-  const bar = document.getElementById('qBar'), count = document.getElementById('qCount');
-  const back = document.getElementById('qBack'), next = document.getElementById('qNext'), send = document.getElementById('qSend');
-  const err = document.getElementById('qError'), out = document.getElementById('qLugares');
-  const bairro = document.getElementById('qBairro'), nome = document.getElementById('qNome');
-  const sofaBox = document.getElementById('qSofaBox'), colBox = document.getElementById('qColchaoBox');
-  const data = { estofado: [], lugares: 3, colchao: '', tecido: '', tempo: '' };
-  let cur = 1;
+  const $ = (id) => document.getElementById(id);
+  const err = $('qfError'), btn = $('qfSend'), btnLabel = $('qfSendLabel'), done = $('qfDone');
+  const sizeBox = $('qfSizeBox'), qtyBox = $('qfQtyBox'), qtyOut = $('qfQty'), qtyLabel = $('qfQtyLabel');
+  const fileInput = $('qfFiles'), grid = $('qfPreviews');
+  const MAX_FILES = 3, MAX_MB = 25;
+  const QTY = { 'Sofá': 'Quantos lugares tem o sofá?', 'Colchão': 'Quantos colchões?', 'Cadeiras': 'Quantas cadeiras?', 'Poltronas': 'Quantas poltronas?', 'Automotivo': 'Quantos bancos?' };
+  const state = { qty: 1, tamanho: '', pets: null };
+  let files = [], busy = false;
 
-  const has = (n) => data.estofado.includes(n);
-  const order = () => (has('Sofá') || has('Colchão')) ? [1, 2, 3, 4, 5, 6] : [1, 2, 4, 5, 6];
-  const chipsOf = (id) => [...document.querySelectorAll('#' + id + ' .q-chip')];
-  const validate = () => {
-    if (cur === 1) return bairro.value.trim() ? '' : 'Informe o seu bairro para continuar.';
-    if (cur === 2) return data.estofado.length ? '' : 'Escolha pelo menos um estofado.';
-    if (cur === 3 && has('Colchão') && !data.colchao) return 'Escolha o tipo de colchão.';
-    if (cur === 4) return data.tecido ? '' : 'Escolha o tipo de tecido.';
-    if (cur === 5) return data.tempo ? '' : 'Escolha uma opção.';
-    return '';
-  };
-  const rows = () => {
-    const r = [['Bairro', bairro.value.trim()], ['Estofado', data.estofado.join(', ')]];
-    if (has('Sofá')) r.push(['Lugares do sofá', String(data.lugares)]);
-    if (has('Colchão')) r.push(['Tipo de colchão', data.colchao]);
-    r.push(['Tecido', data.tecido], ['Última limpeza', data.tempo]);
-    return r;
-  };
-  const show = (n) => {
-    cur = n;
-    const o = order(), total = o.length - 1, idx = o.indexOf(n) + 1;
-    steps.forEach((s) => { s.hidden = Number(s.dataset.step) !== n; });
-    if (n === 3) { sofaBox.hidden = !has('Sofá'); colBox.hidden = !has('Colchão'); }
-    bar.style.width = (n === 6 ? 100 : Math.round(idx / total * 100)) + '%';
-    count.textContent = n === 6 ? 'Revise e envie' : 'Pergunta ' + idx + ' de ' + total;
-    back.hidden = n === 1; next.hidden = n === 6; send.hidden = n !== 6; err.hidden = true;
-    if (n === 6) {
-      const sm = document.getElementById('qSummary'); sm.textContent = '';
-      rows().forEach(([k, v]) => {
-        const li = document.createElement('li'), a = document.createElement('span'), b = document.createElement('strong');
-        a.textContent = k; b.textContent = v; li.append(a, b); sm.append(li);
-      });
-    }
-  };
-  const go = () => { const m = validate(); if (m) { err.textContent = m; err.hidden = false; return; } const o = order(); if (cur !== 6) show(o[o.indexOf(cur) + 1]); };
-  next.addEventListener('click', go);
-  back.addEventListener('click', () => { const o = order(); if (cur > 1) show(o[o.indexOf(cur) - 1]); });
-  bairro.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); go(); } });
-  chipsOf('qEstofado').forEach((c) => c.addEventListener('click', () => {
-    c.setAttribute('aria-pressed', String(c.getAttribute('aria-pressed') !== 'true')); err.hidden = true;
-    data.estofado = chipsOf('qEstofado').filter(x => x.getAttribute('aria-pressed') === 'true').map(x => x.textContent);
-    if (!has('Colchão')) { data.colchao = ''; chipsOf('qColchao').forEach(x => x.setAttribute('aria-pressed', 'false')); }
-  }));
-  chipsOf('qColchao').forEach((c) => c.addEventListener('click', () => {
-    chipsOf('qColchao').forEach(x => x.setAttribute('aria-pressed', String(x === c)));
-    data.colchao = c.textContent; err.hidden = true;
-  }));
-  const single = (id, key, stepNo) => chipsOf(id).forEach((c) => c.addEventListener('click', () => {
-    chipsOf(id).forEach(x => x.setAttribute('aria-pressed', String(x === c)));
-    data[key] = c.textContent; err.hidden = true;
-    setTimeout(() => { if (cur === stepNo) go(); }, 280);
-  }));
-  single('qTecido', 'tecido', 4); single('qTempo', 'tempo', 5);
-  const setL = (n) => { data.lugares = Math.max(1, Math.min(20, n)); out.textContent = data.lugares; };
-  document.getElementById('qMinus').addEventListener('click', () => setL(data.lugares - 1));
-  document.getElementById('qPlus').addEventListener('click', () => setL(data.lugares + 1));
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    if (cur !== 6) { go(); return; }
-    const em = { 'Bairro': '\u{1F4CD}', 'Estofado': '\u{1F6CB}\uFE0F', 'Lugares do sofá': '\u{1F465}', 'Tipo de colchão': '\u{1F6CF}\uFE0F', 'Tecido': '\u{1F9F5}', 'Última limpeza': '\u23F1\uFE0F' };
-    let msg = 'Olá, FSA Clean! Gostaria de um orçamento:\n';
-    rows().forEach(([k, v]) => { msg += '\n' + em[k] + ' ' + k + ': ' + v; });
-    if (nome.value.trim()) msg += '\n\u{1F64B} Nome: ' + nome.value.trim();
-    window.open('https://wa.me/' + WHATS + '?text=' + encodeURIComponent(msg), '_blank', 'noopener');
+  const chips = (id) => [...document.querySelectorAll('#' + id + ' .q-chip')];
+  const fail = (m) => { err.textContent = m; err.hidden = false; err.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
+  const setQty = (n) => { state.qty = Math.max(1, Math.min(30, n)); qtyOut.textContent = state.qty; };
+
+  form.tipo.addEventListener('change', () => {
+    const t = form.tipo.value;
+    sizeBox.hidden = t !== 'Colchão';
+    qtyBox.hidden = !QTY[t];
+    if (QTY[t]) qtyLabel.textContent = QTY[t];
+    setQty(t === 'Sofá' ? 3 : 1); err.hidden = true;
   });
-  show(1);
-})();
+  $('qfMinus').addEventListener('click', () => setQty(state.qty - 1));
+  $('qfPlus').addEventListener('click', () => setQty(state.qty + 1));
+  chips('qfTamanho').forEach((c) => c.addEventListener('click', () => { chips('qfTamanho').forEach(x => x.setAttribute('aria-pressed', String(x === c))); state.tamanho = c.textContent; err.hidden = true; }));
+  chips('qfPets').forEach((c, i) => c.addEventListener('click', () => { chips('qfPets').forEach(x => x.setAttribute('aria-pressed', String(x === c))); state.pets = i === 0; err.hidden = true; }));
 
-/* ===== Abas e envio de fotos/vídeos ===== */
-(() => {
-  const tabQuiz = document.getElementById('tabQuiz'), tabMedia = document.getElementById('tabMedia');
-  const pQuiz = document.getElementById('panelQuiz'), pMedia = document.getElementById('panelMedia');
-  if (!tabQuiz || !pMedia) return;
-  const activate = (media) => {
-    tabQuiz.setAttribute('aria-selected', String(!media)); tabMedia.setAttribute('aria-selected', String(media));
-    pQuiz.hidden = media; pMedia.hidden = !media;
-  };
-  tabQuiz.addEventListener('click', () => activate(false));
-  tabMedia.addEventListener('click', () => activate(true));
+  /* máscara simples de telefone: (75) 99999-9999 */
+  form.whatsapp.addEventListener('input', () => {
+    const d = form.whatsapp.value.replace(/\D/g, '').slice(0, 11);
+    form.whatsapp.value = d.length > 6 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, d.length > 10 ? 7 : 6) + '-' + d.slice(d.length > 10 ? 7 : 6)
+      : d.length > 2 ? '(' + d.slice(0, 2) + ') ' + d.slice(2) : d;
+  });
 
-  const WHATS = '5575981516165', MAX = 10, MAXMB = 100;
-  const input = document.getElementById('mediaInput'), grid = document.getElementById('mediaPreviews');
-  const err = document.getElementById('mediaError'), send = document.getElementById('mediaSend');
-  const label = document.getElementById('mediaSendLabel'), note = document.getElementById('mediaNote');
-  let files = [];
-  const canShareFiles = () => !!(navigator.canShare && navigator.share && files.length && navigator.canShare({ files }));
-  const setNote = () => {
-    const supported = !!(navigator.canShare && navigator.share);
-    label.textContent = supported ? 'Enviar pelo WhatsApp' : 'Abrir o WhatsApp';
-    note.textContent = supported
-      ? 'Ao tocar em enviar, escolha o WhatsApp e depois a conversa da FSA Clean para mandar os arquivos.'
-      : 'O WhatsApp abre com a sua mensagem. Depois, toque no clipe e anexe as fotos e vídeos escolhidos.';
-  };
+  /* arquivos: até 3, com pré-visualização */
   const render = () => {
     grid.textContent = '';
     files.forEach((f, i) => {
@@ -222,45 +159,77 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
       if (f.type.startsWith('video/')) {
         const v = document.createElement('video'); v.src = url + '#t=0.1'; v.muted = true; v.playsInline = true; v.preload = 'metadata';
         const tag = document.createElement('span'); tag.className = 'q-tag'; tag.textContent = 'Vídeo'; t.append(v, tag);
-      } else {
-        const im = document.createElement('img'); im.src = url; im.alt = 'Foto escolhida ' + (i + 1); t.append(im);
-      }
-      const x = document.createElement('button'); x.type = 'button'; x.className = 'q-x'; x.setAttribute('aria-label', 'Remover arquivo'); x.textContent = '\u00d7';
+      } else { const im = document.createElement('img'); im.src = url; im.alt = 'Arquivo ' + (i + 1); t.append(im); }
+      const x = document.createElement('button'); x.type = 'button'; x.className = 'q-x'; x.setAttribute('aria-label', 'Remover'); x.textContent = '\u00d7';
       x.addEventListener('click', () => { URL.revokeObjectURL(url); files.splice(i, 1); render(); });
       t.append(x); grid.append(t);
     });
-    send.disabled = !files.length;
   };
-  input.addEventListener('change', () => {
+  fileInput.addEventListener('change', () => {
     err.hidden = true; let msg = '';
-    [...input.files].forEach((f) => {
-      if (files.length >= MAX) { msg = 'Você pode enviar até ' + MAX + ' arquivos.'; return; }
-      if (f.size > MAXMB * 1048576) { msg = 'Um arquivo passou de ' + MAXMB + ' MB e não foi adicionado.'; return; }
-      if (files.some(x => x.name === f.name && x.size === f.size)) return;
+    [...fileInput.files].forEach((f) => {
+      if (files.length >= MAX_FILES) { msg = 'Você pode enviar até ' + MAX_FILES + ' arquivos.'; return; }
+      if (f.size > MAX_MB * 1048576) { msg = 'Um arquivo passou de ' + MAX_MB + ' MB e não foi adicionado.'; return; }
+      if (!/^(image|video)\//.test(f.type)) { msg = 'Envie apenas fotos ou vídeos.'; return; }
       files.push(f);
     });
-    input.value = '';
-    if (msg) { err.textContent = msg; err.hidden = false; }
-    render();
+    fileInput.value = ''; if (msg) fail(msg); render();
   });
-  const buildText = () => {
-    let m = 'Olá, FSA Clean! Estou enviando fotos e vídeos do meu estofado para orçamento.';
-    const b = (document.getElementById('qBairro')?.value || '').trim();
-    const est = [...document.querySelectorAll('#qEstofado .q-chip[aria-pressed="true"]')].map(c => c.textContent).join(', ');
-    if (b) m += '\n\u{1F4CD} Bairro: ' + b;
-    if (est) m += '\n\u{1F6CB}\uFE0F Estofado: ' + est;
-    return m;
+
+  const shrink = async (file) => {
+    if (!file.type.startsWith('image/')) return file;
+    try {
+      const bmp = await createImageBitmap(file), k = Math.min(1, 1600 / Math.max(bmp.width, bmp.height));
+      const cv = document.createElement('canvas'); cv.width = Math.round(bmp.width * k); cv.height = Math.round(bmp.height * k);
+      cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+      const blob = await new Promise((r) => cv.toBlob(r, 'image/jpeg', 0.82));
+      return blob && blob.size < file.size ? new File([blob], 'foto.jpg', { type: 'image/jpeg' }) : file;
+    } catch (_) { return file; }
   };
-  send.addEventListener('click', async () => {
-    if (!files.length) return;
-    const text = buildText();
-    if (canShareFiles()) {
-      try { await navigator.share({ files, text }); return; }
-      catch (e) { if (e && e.name === 'AbortError') return; }
-    }
-    window.open('https://wa.me/' + WHATS + '?text=' + encodeURIComponent(text), '_blank', 'noopener');
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = crypto.getRandomValues(new Uint8Array(1))[0] & 15; return (c === 'x' ? r : (r & 3) | 8).toString(16); }));
+  const extOf = (f) => ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif', 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }[f.type] || 'bin');
+
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (busy) return;
+    if (form.site.value) { form.hidden = true; done.hidden = false; return; }   /* antispam (campo invisível) */
+    const nome = form.nome.value.trim(), bairro = form.bairro.value.trim(), tipo = form.tipo.value, tecido = form.tecido.value;
+    let tel = form.whatsapp.value.replace(/\D/g, '');
+    if (nome.length < 2) return fail('Informe o seu nome.');
+    if (tel.length < 10 || tel.length > 11) return fail('Informe um WhatsApp válido, com DDD.');
+    if (bairro.length < 2) return fail('Informe o seu bairro.');
+    if (!tipo) return fail('Escolha o tipo de estofado.');
+    if (tipo === 'Colchão' && !state.tamanho) return fail('Escolha o tamanho do colchão.');
+    if (!tecido) return fail('Escolha o tipo de tecido.');
+    if (state.pets === null) return fail('Informe se possui pets ou manchas.');
+    const db = window.fsaDb && window.fsaDb();
+    if (!db) return fail('Não foi possível enviar agora. Tente novamente em instantes.');
+    if (tel.length <= 11) tel = '55' + tel;
+    busy = true; btn.disabled = true; err.hidden = true; btnLabel.textContent = 'Enviando...';
+    try {
+      const id = uuid(), paths = [];
+      for (let i = 0; i < files.length; i++) {
+        btnLabel.textContent = 'Enviando arquivo ' + (i + 1) + ' de ' + files.length + '...';
+        const f = await shrink(files[i]);
+        const path = id + '/' + (i + 1) + '-' + Math.random().toString(36).slice(2, 8) + '.' + extOf(f);
+        const up = await db.storage.from('orcamentos-fotos').upload(path, f, { contentType: f.type, upsert: false });
+        if (up.error) throw up.error;
+        paths.push(path);
+      }
+      btnLabel.textContent = 'Finalizando...';
+      const ins = await db.from('orcamentos').insert({
+        id, nome, whatsapp: tel, bairro, tipo_estofado: tipo,
+        quantidade: QTY[tipo] ? state.qty : 1,
+        tamanho: tipo === 'Colchão' ? state.tamanho : (tipo === 'Sofá' ? state.qty + ' lugares' : null),
+        tipo_tecido: tecido, pets_manchas: !!state.pets,
+        detalhes: form.detalhes.value.trim() || null, fotos: paths
+      });
+      if (ins.error) throw ins.error;
+      form.hidden = true; done.hidden = false; done.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch (_) {
+      fail('Não foi possível enviar agora. Confira sua conexão e tente novamente.');
+    } finally { busy = false; btn.disabled = false; btnLabel.textContent = 'Enviar solicitação'; }
   });
-  setNote(); render();
 })();
 
 /* ===== Animação de entrada do topo: toca quando a seção aparece ===== */
