@@ -36,8 +36,8 @@
   const enter = async (session) => {
     const { data, error } = await db.rpc('is_admin');
     if (error || data !== true) { await db.auth.signOut(); return showLogin('Este usuário não tem permissão de acesso ao painel.'); }
-    $('who').textContent = session.user.email; $('login').hidden = true; $('app').hidden = false;
-    await loadPrices(); loadOrc(); refreshBadges();
+    $('who').textContent = session.user.email + ' · v4'; $('login').hidden = true; $('app').hidden = false;
+    await loadPrices(); await ensurePrices(); loadLogo().catch(() => null); loadOrc(); refreshBadges();
   };
   const boot = async () => {
     db = window.fsaDb && window.fsaDb();
@@ -76,11 +76,18 @@
     precoRows = error ? [] : data; P = { base: {}, bairro: {}, tecido: {}, extra: {} };
     precoRows.forEach((r) => { P[r.categoria][r.chave] = Number(r.valor); });
   };
+  /* garante os dois adicionais separados na tabela de preços (mesmo se o SQL não tiver rodado) */
+  const ensurePrices = async () => {
+    const need = ['Adicional Pets', 'Adicional Manchas'].filter((k) => !(k in P.extra));
+    if (!need.length) return;
+    await db.from('precos').upsert(need.map((chave) => ({ categoria: 'extra', chave, valor: 0 })), { onConflict: 'categoria,chave' });
+    await loadPrices();
+  };
   const GROUPS = { base: 'Preço base', bairro: 'Taxa de bairro', tecido: 'Adicional de tecido', extra: 'Extras e pagamento' };
   const renderPrices = async () => {
     await loadPrices(); const box = $('prGroups'); box.textContent = '';
     Object.keys(GROUPS).forEach((cat) => {
-      const rows = precoRows.filter((r) => r.categoria === cat);
+      const rows = precoRows.filter((r) => r.categoria === cat && r.chave !== 'Pets/manchas');
       const g = el('div', { class: 'card price-group' }, el('h3', { text: GROUPS[cat], style: 'margin-bottom:12px' }));
       rows.forEach((r) => {
         const inp = el('input', { inputmode: 'decimal', value: numIn(r.valor), 'data-cat': cat, 'data-key': r.chave, 'aria-label': r.chave });
@@ -132,7 +139,7 @@
     if (o.tipo_estofado === 'Colchão') base = (lookup('base', 'Colchão ' + (o.tamanho || '')) || 0) * o.quantidade;
     else base = (P.base[BASE_KEY[o.tipo_estofado]] || 0) * (o.tipo_estofado === 'Outro' ? 1 : o.quantidade);
     const bairro = lookup('bairro', o.bairro); const taxa = bairro !== null ? bairro : (P.bairro['Padrão'] || 0);
-    return { preco_base: base, taxa_bairro: taxa, adicional_tecido: lookup('tecido', o.tipo_tecido) || 0, adicional_pet: o.pets_manchas ? (P.extra['Pets/manchas'] || 0) : 0 };
+    return { preco_base: base, taxa_bairro: taxa, adicional_tecido: lookup('tecido', o.tipo_tecido) || 0, adicional_pet: o.tem_pets ? (P.extra['Adicional Pets'] || 0) : 0, adicional_manchas: o.tem_manchas ? (P.extra['Adicional Manchas'] || 0) : 0 };
   };
   const pay = (total) => {
     const pix = P.extra['Desconto Pix (%)'] || 0, card = P.extra['Acréscimo cartão (%)'] || 0;
@@ -150,15 +157,15 @@
   async function openOrc(id) {
     const { data: o, error } = await db.from('orcamentos').select('*').eq('id', id).single();
     if (error || !o) return alert('Não foi possível abrir este orçamento.');
-    await loadPrices();
+    await loadPrices(); await loadLogo().catch(() => null);
     const fresh = o.preco_base === null;               /* ainda não calculado => sugere */
     const sg = suggest(o);
-    const v = { preco_base: fresh ? sg.preco_base : o.preco_base, taxa_bairro: fresh ? sg.taxa_bairro : o.taxa_bairro, adicional_tecido: fresh ? sg.adicional_tecido : o.adicional_tecido, adicional_pet: fresh ? sg.adicional_pet : o.adicional_pet, outros: o.outros, desconto: o.desconto };
+    const v = { preco_base: fresh ? sg.preco_base : o.preco_base, taxa_bairro: fresh ? sg.taxa_bairro : o.taxa_bairro, adicional_tecido: fresh ? sg.adicional_tecido : o.adicional_tecido, adicional_pet: fresh ? sg.adicional_pet : o.adicional_pet, adicional_manchas: fresh ? sg.adicional_manchas : (o.adicional_manchas || 0), outros: o.outros, desconto: o.desconto };
     const f = {}; const fld = (key, label) => { f[key] = el('input', { inputmode: 'decimal', value: numIn(v[key]) }); f[key].addEventListener('input', recalc); return el('label', {}, label, f[key]); };
     const totalOut = el('b', { text: brl(0) }), payBox = el('div', { class: 'hint' });
     const status = el('select', {}, ...Object.keys(STATUS).slice(0, 6).map((s) => el('option', { value: s, text: STATUS[s], selected: s === (o.status === 'novo' ? 'em_analise' : o.status) })));
     const obs = el('textarea', { rows: 2, maxlength: 400, placeholder: 'Aparece no PDF (ex.: prazo, condições)' }); obs.value = o.observacoes || '';
-    const sum = () => ['preco_base', 'taxa_bairro', 'adicional_tecido', 'adicional_pet', 'outros'].reduce((s, k) => s + num(f[k].value), 0) - num(f.desconto.value);
+    const sum = () => ['preco_base', 'taxa_bairro', 'adicional_tecido', 'adicional_pet', 'adicional_manchas', 'outros'].reduce((s, k) => s + num(f[k].value), 0) - num(f.desconto.value);
     function recalc() { const t = Math.max(0, sum()); totalOut.textContent = brl(t); const p = pay(t); payBox.textContent = 'À vista (Pix ou dinheiro)' + (p.pixPct ? ' com ' + p.pixPct + '% de desconto' : '') + ': ' + brl(p.pix) + ' · Cartão até 3x de ' + brl(p.parcela); }
     const photos = el('div', { class: 'photos' });
     if ((o.fotos || []).length) db.storage.from('orcamentos-fotos').createSignedUrls(o.fotos, 3600).then(({ data }) => (data || []).forEach((r, i) => {
@@ -169,32 +176,28 @@
     const waLink = el('a', { class: 'btn ok', target: '_blank', rel: 'noopener', hidden: true, text: 'Abrir conversa no WhatsApp' });
     const pdfLinks = el('div', { class: 'actions', hidden: true });
 
-    const values = () => ({ preco_base: num(f.preco_base.value), taxa_bairro: num(f.taxa_bairro.value), adicional_tecido: num(f.adicional_tecido.value), adicional_pet: num(f.adicional_pet.value), outros: num(f.outros.value), desconto: num(f.desconto.value), total: Math.max(0, Math.round(sum() * 100) / 100), status: status.value, observacoes: obs.value.trim() || null, atualizado_em: new Date().toISOString() });
-    const save = async () => { const { error } = await db.from('orcamentos').update(values()).eq('id', o.id); if (error) { msg(note, 'Não foi possível salvar.'); return false; } msg(note, 'Salvo!', true); return true; };
+    const values = () => ({ preco_base: num(f.preco_base.value), taxa_bairro: num(f.taxa_bairro.value), adicional_tecido: num(f.adicional_tecido.value), adicional_pet: num(f.adicional_pet.value), adicional_manchas: num(f.adicional_manchas.value), outros: num(f.outros.value), desconto: num(f.desconto.value), total: Math.max(0, Math.round(sum() * 100) / 100), status: status.value, observacoes: obs.value.trim() || null, atualizado_em: new Date().toISOString() });
+    const save = async (quiet) => { const { error } = await db.from('orcamentos').update(values()).eq('id', o.id); if (error) { msg(note, 'Não foi possível salvar. Confira se o SQL "supabase-atualizacao-2" foi executado no Supabase.'); return false; } if (!quiet) msg(note, 'Salvo!', true); return true; };
 
     const phone = (o.whatsapp || '').replace(/\D/g, '');
-    const gen = async (btn) => {
-      btn.disabled = true; msg(note, 'Gerando PDF...', true);
-      try {
-        if (status.value === 'novo' || status.value === 'em_analise') status.value = 'orcado';
-        if (!(await save())) return;
-        const vals = values(); const doc = await buildPdf({ ...o, ...vals });
-        const blob = doc.output('blob'); const local = URL.createObjectURL(blob);
-        const short = 'orcamento-fsa-clean-' + norm(o.nome).replace(/[^a-z0-9]+/g, '-').slice(0, 24) + '.pdf';
-        pdfLinks.textContent = ''; pdfLinks.hidden = false;
-        pdfLinks.append(el('a', { class: 'btn ghost', href: local, target: '_blank', rel: 'noopener', text: 'Abrir PDF' }), el('a', { class: 'btn ghost', href: local, download: short, text: 'Baixar PDF' }));
-        let link = null; const path = o.id + '.pdf';
-        const up = await db.storage.from('orcamentos-pdf').upload(path, blob, { contentType: 'application/pdf', upsert: true });
-        if (!up.error) { link = await signed('orcamentos-pdf', path, 604800); await db.from('orcamentos').update({ pdf_path: path }).eq('id', o.id); }
-        const p = pay(vals.total);
-        const nref = o.numero ? String(o.numero).padStart(4, '0') : o.id.slice(0, 6).toUpperCase();
-        const text = 'Olá, ' + o.nome.split(' ')[0] + '! Aqui é da FSA Clean. Segue o seu orçamento técnico nº ' + nref + ' para a higienização de ' + o.tipo_estofado.toLowerCase() + ':\n\n' +
-          'Subtotal: ' + brl(vals.total) + '\nÀ vista (Pix ou dinheiro)' + (p.pixPct ? ' com ' + p.pixPct + '% de desconto' : '') + ': ' + brl(p.pix) + '\nCartão: até 3x de ' + brl(p.parcela) + ' (parcelamento com taxas da máquina)' +
-          (link ? '\n\nOrçamento completo em PDF (link válido por 7 dias):\n' + link : '') + '\n\nQualquer dúvida, é só responder esta mensagem.';
-        const full = phone.length <= 11 ? '55' + phone : phone;
-        waLink.href = 'https://wa.me/' + full + '?text=' + encodeURIComponent(text); waLink.hidden = false;
-        msg(note, link ? 'PDF gerado e salvo. Toque em "Abrir conversa no WhatsApp" para enviar ao cliente.' : 'PDF gerado, mas não foi possível guardar o link online. Baixe o PDF e envie pelo WhatsApp.', true);
-      } catch (e) { msg(note, 'Não foi possível gerar o PDF. Verifique a conexão e tente de novo.'); } finally { btn.disabled = false; }
+    const WA_TEXT = (nome) => 'Olá, ' + nome + '! Tudo bem?\nAqui é da FSA Clean! \u{1F9FC}\nJá preparamos o seu orçamento detalhado de higienização. Estou enviando em anexo o arquivo PDF com todos os valores e condições.\nQualquer dúvida estou à disposição!';
+    const gen = () => {
+      /* Tudo síncrono de propósito: o navegador só libera o download e a abertura do WhatsApp dentro do toque do usuário. */
+      msg(note, '');
+      if (status.value === 'novo' || status.value === 'em_analise') status.value = 'orcado';
+      const vals = values(); let blob;
+      try { blob = buildPdf({ ...o, ...vals }).output('blob'); } catch (e) { return msg(note, 'Não foi possível gerar o PDF. Atualize a página e tente de novo.'); }
+      const local = URL.createObjectURL(blob);
+      const file = 'orcamento-fsa-clean-' + norm(o.nome).replace(/[^a-z0-9]+/g, '-').slice(0, 24) + '.pdf';
+      const a = el('a', { href: local, download: file }); document.body.append(a); a.click(); a.remove();          /* (a) baixa o PDF */
+      const full = phone.length <= 11 ? '55' + phone : phone;
+      const wa = 'https://wa.me/' + full + '?text=' + encodeURIComponent(WA_TEXT(o.nome));
+      const w = window.open(wa, '_blank');                                                                          /* (b) abre o WhatsApp do cliente na hora */
+      waLink.href = wa; waLink.hidden = false;
+      pdfLinks.textContent = ''; pdfLinks.hidden = false;
+      pdfLinks.append(el('a', { class: 'btn ghost', href: local, target: '_blank', rel: 'noopener', text: 'Abrir PDF' }), el('a', { class: 'btn ghost', href: local, download: file, text: 'Baixar PDF de novo' }));
+      msg(note, w ? 'PDF baixado e WhatsApp aberto. Anexe o PDF na conversa (clipe) e envie.' : 'PDF baixado. O navegador bloqueou a abertura do WhatsApp: toque em "Abrir conversa no WhatsApp".', true);
+      save(true);   /* grava valores e status depois, sem atrapalhar o download */
     };
     const toCash = async (btn) => {
       const t = Math.max(0, sum()); const forma = prompt('Forma de pagamento (Pix, Cartão ou Dinheiro):', 'Pix'); if (forma === null) return;
@@ -214,9 +217,9 @@
     };
     const missing = fresh && sg.preco_base === 0 ? el('p', { class: 'hint', text: 'Dica: a sugestão ficou em R$ 0,00 porque a aba Preços ainda não foi preenchida. Você pode digitar os valores aqui mesmo.' }) : document.createComment('sem dica');
 
-    out.append(el('button', { class: 'btn ghost', type: 'button', text: 'Sugerir de novo', onclick: () => { const s = suggest(o); ['preco_base', 'taxa_bairro', 'adicional_tecido', 'adicional_pet'].forEach((k) => { f[k].value = numIn(s[k]); }); recalc(); } }),
-      el('button', { class: 'btn', type: 'button', text: 'Salvar', onclick: save }),
-      el('button', { class: 'btn', type: 'button', text: 'Gerar PDF (1 clique)', onclick: (e) => gen(e.currentTarget) }));
+    out.append(el('button', { class: 'btn ghost', type: 'button', text: 'Sugerir de novo', onclick: () => { const s = suggest(o); ['preco_base', 'taxa_bairro', 'adicional_tecido', 'adicional_pet', 'adicional_manchas'].forEach((k) => { f[k].value = numIn(s[k]); }); recalc(); } }),
+      el('button', { class: 'btn', type: 'button', text: 'Salvar', onclick: () => save() }),
+      el('button', { class: 'btn', type: 'button', text: 'Gerar PDF e abrir WhatsApp', onclick: (e) => gen(e.currentTarget) }));
     body.textContent = '';
     body.append(
       el('div', { class: 'mhead' }, el('div', {}, el('h2', { text: o.nome }), el('span', { class: 'muted small', text: 'Recebido em ' + fmtDT(o.created_at) })), el('button', { class: 'x', type: 'button', 'aria-label': 'Fechar', text: '\u00d7', onclick: closeDlg })),
@@ -226,11 +229,13 @@
         el('div', {}, el('span', { text: 'Estofado' }), o.tipo_estofado + (o.tamanho ? ' · ' + o.tamanho : '') + (o.quantidade > 1 && o.tipo_estofado !== 'Sofá' ? ' · ' + o.quantidade + ' un.' : '')),
         el('div', {}, el('span', { text: 'Tecido' }), o.tipo_tecido),
         el('div', {}, el('span', { text: 'Última limpeza' }), o.ultima_limpeza || '—'),
-        el('div', {}, el('span', { text: 'Pets ou manchas' }), o.pets_manchas ? 'Sim' : 'Não'),
+        el('div', {}, el('span', { text: 'Possui pets?' }), o.tem_pets ? 'Sim' : 'Não'),
+        el('div', {}, el('span', { text: 'Possui manchas?' }), o.tem_manchas ? 'Sim' : 'Não'),
+        (o.pets_manchas && !o.tem_pets && !o.tem_manchas) ? el('div', {}, el('span', { text: 'Pets/manchas (cadastro antigo)' }), 'Sim') : document.createComment('-'),
         el('div', {}, el('span', { text: 'Observações do cliente' }), o.detalhes || '—')),
       (o.fotos || []).length ? photos : el('p', { class: 'hint', text: 'O cliente não enviou fotos ou vídeos.' }),
       el('h3', { text: 'Valores', style: 'font-size:1.05rem' }), missing,
-      el('div', { class: 'calc' }, fld('preco_base', 'Preço base (tamanho do estofado)'), fld('taxa_bairro', 'Taxa do bairro'), fld('adicional_tecido', 'Adicional de tecido'), fld('adicional_pet', 'Adicional pets/manchas'), fld('outros', 'Outros acréscimos'), fld('desconto', 'Desconto')),
+      el('div', { class: 'calc' }, fld('preco_base', 'Preço base (tamanho do estofado)'), fld('taxa_bairro', 'Taxa do bairro'), fld('adicional_tecido', 'Adicional de tecido'), fld('adicional_pet', 'Adicional pets'), fld('adicional_manchas', 'Adicional manchas'), fld('outros', 'Outros acréscimos'), fld('desconto', 'Desconto')),
       el('div', { class: 'total' }, el('span', { text: 'Subtotal dos serviços' }), totalOut), payBox,
       el('div', { class: 'calc' }, el('label', {}, 'Status', status), el('label', {}, 'Observações (aparecem no PDF)', obs)),
       out, note, pdfLinks, waLink,
@@ -246,7 +251,7 @@
     logoData = await new Promise((r) => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(blob); });
     return logoData;
   };
-  async function buildPdf(o) {
+  function buildPdf(o) {
     const { jsPDF } = window.jspdf; const d = new jsPDF({ unit: 'mm', format: 'a4' });
     const W = 210, H = 297, M = 14, CW = W - 2 * M;
     const NAVY = [7, 60, 105], BLUE = [8, 111, 168], TURQ = [32, 192, 196], INK = [20, 45, 64], GRAY = [98, 116, 134], PALE = [241, 249, 252], LINE = [214, 229, 236], WHITE = [255, 255, 255];
@@ -254,7 +259,7 @@
     const font = (st, sz, c) => { d.setFont('helvetica', st); d.setFontSize(sz); d.setTextColor(c[0], c[1], c[2]); };
     const T = (s, x, y, opt) => d.text(String(s), x, y, opt);
     const wrap = (s, w) => d.splitTextToSize(String(s), w);
-    const logo = await loadLogo().catch(() => null);
+    const logo = logoData;
     const ref = '#ORC-' + (o.numero ? String(o.numero).padStart(4, '0') : o.id.slice(0, 6).toUpperCase());
     const m = (v) => brl(v);
     const per = (o.quantidade > 0 ? Number(o.preco_base) / o.quantidade : Number(o.preco_base));
@@ -309,11 +314,12 @@
     };
     const T0 = o.tipo_estofado, SUBT = { 'Sofá': 'Lavagem a seco/extração profunda', 'Colchão': 'Eliminação de ácaros e fungos' }[T0] || 'Extração profunda';
     const ITEM = { 'Sofá': 'Higienização de Sofá', 'Colchão': 'Higienização de Colchão', 'Cadeiras': 'Higienização de Cadeiras', 'Poltronas': 'Higienização de Poltronas', 'Automotivo': 'Higienização Automotiva' }[T0] || 'Higienização de Estofado';
-    const det = ['Tecido: ' + o.tipo_tecido]; if (o.tamanho) det.push(o.tamanho); if (o.pets_manchas) det.push('Pets/manchas: sim'); if (o.ultima_limpeza) det.push('Última limpeza: ' + o.ultima_limpeza);
+    const det = ['Tecido: ' + o.tipo_tecido]; if (o.tamanho) det.push(o.tamanho); if (o.tem_pets) det.push('Pets: sim'); if (o.tem_manchas) det.push('Manchas: sim'); if (o.pets_manchas && !o.tem_pets && !o.tem_manchas) det.push('Pets/manchas: sim'); if (o.ultima_limpeza) det.push('Última limpeza: ' + o.ultima_limpeza);
     row(ITEM, SUBT, det, o.quantidade, per, Number(o.preco_base));
     if (Number(o.taxa_bairro)) row('Taxa de Deslocamento', '', [o.bairro], 1, Number(o.taxa_bairro), Number(o.taxa_bairro));
     if (Number(o.adicional_tecido)) row('Adicional de tecido', '', [o.tipo_tecido], 1, Number(o.adicional_tecido), Number(o.adicional_tecido));
-    if (Number(o.adicional_pet)) row('Adicional pets/manchas', '', [], 1, Number(o.adicional_pet), Number(o.adicional_pet));
+    if (Number(o.adicional_pet)) row('Adicional pets', '', [], 1, Number(o.adicional_pet), Number(o.adicional_pet));
+    if (Number(o.adicional_manchas)) row('Adicional manchas', '', [], 1, Number(o.adicional_manchas), Number(o.adicional_manchas));
     if (Number(o.outros)) row('Outros acréscimos', '', [], 1, Number(o.outros), Number(o.outros));
     if (Number(o.desconto)) row('Desconto', '', [], 1, -Number(o.desconto), -Number(o.desconto));
     y += 6;

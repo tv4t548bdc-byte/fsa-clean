@@ -121,10 +121,10 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   const $ = (id) => document.getElementById(id);
   const err = $('qfError'), btn = $('qfSend'), btnLabel = $('qfSendLabel'), done = $('qfDone');
   const sizeBox = $('qfSizeBox'), qtyBox = $('qfQtyBox'), qtyOut = $('qfQty'), qtyLabel = $('qfQtyLabel');
-  const fileInput = $('qfFiles'), grid = $('qfPreviews');
+  const fotosInput = $('qfFiles'), grid = $('qfPreviews');
   const MAX_FILES = 20, MAX_MB = 25, MAX_TOTAL_MB = 100;
   const QTY = { 'Sofá': 'Quantos lugares tem o sofá?', 'Colchão': 'Quantos colchões?', 'Cadeiras': 'Quantas cadeiras?', 'Poltronas': 'Quantas poltronas?', 'Automotivo': 'Quantos bancos?' };
-  const state = { qty: 1, tamanho: '', pets: null };
+  const state = { qty: 1, tamanho: '', pets: null, manchas: null };
   let files = [], busy = false;
 
   const chips = (id) => [...document.querySelectorAll('#' + id + ' .q-chip')];
@@ -142,6 +142,7 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   $('qfPlus').addEventListener('click', () => setQty(state.qty + 1));
   chips('qfTamanho').forEach((c) => c.addEventListener('click', () => { chips('qfTamanho').forEach(x => x.setAttribute('aria-pressed', String(x === c))); state.tamanho = c.textContent; err.hidden = true; }));
   chips('qfPets').forEach((c, i) => c.addEventListener('click', () => { chips('qfPets').forEach(x => x.setAttribute('aria-pressed', String(x === c))); state.pets = i === 0; err.hidden = true; }));
+  chips('qfManchas').forEach((c, i) => c.addEventListener('click', () => { chips('qfManchas').forEach(x => x.setAttribute('aria-pressed', String(x === c))); state.manchas = i === 0; err.hidden = true; }));
 
   /* máscara simples de telefone: (75) 99999-9999 */
   form.whatsapp.addEventListener('input', () => {
@@ -166,9 +167,9 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
       t.append(x); grid.append(t);
     });
   };
-  fileInput.addEventListener('change', () => {
+  fotosInput.addEventListener('change', () => {
     err.hidden = true; let msg = '';
-    [...fileInput.files].forEach((f) => {
+    [...fotosInput.files].forEach((f) => {
       if (files.length >= MAX_FILES) { msg = 'Você pode enviar até ' + MAX_FILES + ' arquivos.'; return; }
       if (f.size > MAX_MB * 1048576) { msg = 'Um arquivo passou de ' + MAX_MB + ' MB e não foi adicionado.'; return; }
       if (!/^(image|video)\//.test(f.type)) { msg = 'Envie apenas fotos ou vídeos.'; return; }
@@ -176,7 +177,7 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
       if (est > MAX_TOTAL_MB * 1048576) { msg = 'O total passou de ' + MAX_TOTAL_MB + ' MB. Remova algum vídeo ou envie menos arquivos.'; return; }
       files.push(f);
     });
-    fileInput.value = ''; if (msg) fail(msg); render();
+    fotosInput.value = ''; if (msg) fail(msg); render();
   });
 
   const shrink = async (file) => {
@@ -192,10 +193,34 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => { const r = crypto.getRandomValues(new Uint8Array(1))[0] & 15; return (c === 'x' ? r : (r & 3) | 8).toString(16); }));
   const extOf = (f) => ({ 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/heic': 'heic', 'image/heif': 'heif', 'video/mp4': 'mp4', 'video/quicktime': 'mov', 'video/webm': 'webm' }[f.type] || 'bin');
 
+  /* Aviso por e-mail de novo orçamento (serviço FormSubmit; não bloqueia o envio se falhar) */
+  const NOTIFY_EMAIL = 'fsaclean75@gmail.com';
+  const notifyEmail = (d) => {
+    try {
+      fetch('https://formsubmit.co/ajax/' + NOTIFY_EMAIL, {
+        method: 'POST', keepalive: true,
+        headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+        body: JSON.stringify({
+          _subject: 'Novo orçamento recebido - FSA Clean', _template: 'table', _captcha: 'false',
+          'Aviso': 'Novo orçamento recebido pelo site. Abra o painel para ver as fotos e responder.',
+          'Cliente': d.nome, 'Bairro': d.bairro, 'Estofado': d.tipo, 'Tecido': d.tecido,
+          'Possui pets': d.pets ? 'Sim' : 'Não', 'Possui manchas': d.manchas ? 'Sim' : 'Não',
+          'Arquivos anexados': String(d.n), 'Painel': location.origin + '/admin'
+        })
+      }).catch(() => {});
+    } catch (_) { /* o orçamento já foi salvo; o aviso é só um extra */ }
+  };
+
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     if (busy) return;
     if (form.site.value) { form.hidden = true; done.hidden = false; return; }   /* antispam (campo invisível) */
+    /* FOTO OBRIGATÓRIA: nunca envia sem pelo menos 1 arquivo (a lista `files` guarda o que foi escolhido) */
+    if (!files || files.length === 0) {
+      alert('Por favor, anexe pelo menos 1 foto do estofado para solicitar o orçamento.');
+      fail('Anexe pelo menos 1 foto do estofado para solicitar o orçamento.');
+      return;
+    }
     const nome = form.nome.value.trim(), bairro = form.bairro.value.trim(), tipo = form.tipo.value, tecido = form.tecido.value, limpeza = form.limpeza.value;
     let tel = form.whatsapp.value.replace(/\D/g, '');
     if (nome.length < 2) return fail('Informe o seu nome.');
@@ -205,7 +230,8 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
     if (tipo === 'Colchão' && !state.tamanho) return fail('Escolha o tamanho do colchão.');
     if (!tecido) return fail('Escolha o tipo de tecido.');
     if (!limpeza) return fail('Informe há quanto tempo o estofado não é limpo.');
-    if (state.pets === null) return fail('Informe se possui pets ou manchas.');
+    if (state.pets === null) return fail('Informe se possui pets.');
+    if (state.manchas === null) return fail('Informe se possui manchas.');
     const db = window.fsaDb && window.fsaDb();
     if (!db) return fail('Não foi possível enviar agora. Tente novamente em instantes.');
     if (tel.length <= 11) tel = '55' + tel;
@@ -223,16 +249,18 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
           btnLabel.textContent = 'Enviando arquivos (' + doneN + ' de ' + files.length + ')...';
         }
       };
-      if (files.length) { btnLabel.textContent = 'Enviando arquivos...'; await Promise.all(Array.from({ length: Math.min(3, files.length) }, worker)); }
+      btnLabel.textContent = 'Enviando arquivos...'; await Promise.all(Array.from({ length: Math.min(3, files.length) }, worker));
+      if (paths.length < 1 || paths.some((x) => !x)) throw new Error('sem foto');   /* última barreira: nada vai ao banco sem foto */
       btnLabel.textContent = 'Finalizando...';
       const ins = await db.from('orcamentos').insert({
         id, nome, whatsapp: tel, bairro, tipo_estofado: tipo,
         quantidade: QTY[tipo] ? state.qty : 1,
         tamanho: tipo === 'Colchão' ? state.tamanho : (tipo === 'Sofá' ? state.qty + ' lugares' : null),
-        tipo_tecido: tecido, ultima_limpeza: limpeza, pets_manchas: !!state.pets,
+        tipo_tecido: tecido, ultima_limpeza: limpeza, tem_pets: !!state.pets, tem_manchas: !!state.manchas,
         detalhes: form.detalhes.value.trim() || null, fotos: paths
       });
       if (ins.error) throw ins.error;
+      notifyEmail({ nome, bairro, tipo, tecido, n: paths.length, pets: !!state.pets, manchas: !!state.manchas });
       form.hidden = true; done.hidden = false; done.scrollIntoView({ block: 'center', behavior: 'smooth' });
     } catch (_) {
       fail('Não foi possível enviar agora. Confira sua conexão e tente novamente.');
