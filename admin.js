@@ -16,6 +16,7 @@
     kids.flat().forEach((c) => { if (c != null) n.append(c.nodeType ? c : document.createTextNode(String(c))); });
     return n;
   };
+  const fmtPhone = (w) => { let d = String(w || '').replace(/\D/g, ''); if (d.length > 11 && d.startsWith('55')) d = d.slice(2); return d.length === 11 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, 7) + '-' + d.slice(7) : d.length === 10 ? '(' + d.slice(0, 2) + ') ' + d.slice(2, 6) + '-' + d.slice(6) : String(w || ''); };
   const brl = (v) => (Number(v) || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }).replace(/\u00a0/g, ' ');
   const num = (v) => { const n = parseFloat(String(v ?? '').replace(/\./g, '').replace(',', '.')); return isNaN(n) ? 0 : Math.round(n * 100) / 100; };
   const numIn = (v) => (v === null || v === undefined ? '' : String(Number(v)).replace('.', ','));
@@ -135,7 +136,8 @@
   };
   const pay = (total) => {
     const pix = P.extra['Desconto Pix (%)'] || 0, card = P.extra['Acréscimo cartão (%)'] || 0;
-    return { pix: total * (1 - pix / 100), pixPct: pix, cardTotal: total * (1 + card / 100), parcela: (total * (1 + card / 100)) / 3 };
+    const r2 = (n) => Math.round(n * 100) / 100;
+    return { pixPct: pix, desc: r2(total * pix / 100), pix: r2(total * (1 - pix / 100)), cardTotal: r2(total * (1 + card / 100)), parcela: r2((total * (1 + card / 100)) / 3) };
   };
 
   /* ---------- orçamentos: detalhe ---------- */
@@ -157,9 +159,12 @@
     const status = el('select', {}, ...Object.keys(STATUS).slice(0, 6).map((s) => el('option', { value: s, text: STATUS[s], selected: s === (o.status === 'novo' ? 'em_analise' : o.status) })));
     const obs = el('textarea', { rows: 2, maxlength: 400, placeholder: 'Aparece no PDF (ex.: prazo, condições)' }); obs.value = o.observacoes || '';
     const sum = () => ['preco_base', 'taxa_bairro', 'adicional_tecido', 'adicional_pet', 'outros'].reduce((s, k) => s + num(f[k].value), 0) - num(f.desconto.value);
-    function recalc() { const t = Math.max(0, sum()); totalOut.textContent = brl(t); const p = pay(t); payBox.textContent = 'Pix' + (p.pixPct ? ' (' + p.pixPct + '% de desconto)' : '') + ': ' + brl(p.pix) + ' · Cartão até 3x de ' + brl(p.parcela) + ' · Dinheiro: ' + brl(t); }
+    function recalc() { const t = Math.max(0, sum()); totalOut.textContent = brl(t); const p = pay(t); payBox.textContent = 'À vista (Pix ou dinheiro)' + (p.pixPct ? ' com ' + p.pixPct + '% de desconto' : '') + ': ' + brl(p.pix) + ' · Cartão até 3x de ' + brl(p.parcela); }
     const photos = el('div', { class: 'photos' });
-    (o.fotos || []).forEach(async (p) => { const u = await signed('orcamentos-fotos', p); if (!u) return; photos.append(el('a', { href: u, target: '_blank', rel: 'noopener' }, isVideo(p) ? el('video', { src: u + '#t=0.1', muted: true, playsinline: true, preload: 'metadata' }) : el('img', { src: u, alt: 'Foto do cliente', loading: 'lazy' }))); });
+    if ((o.fotos || []).length) db.storage.from('orcamentos-fotos').createSignedUrls(o.fotos, 3600).then(({ data }) => (data || []).forEach((r, i) => {
+      if (!r || !r.signedUrl) return; const p = o.fotos[i] || '';
+      photos.append(el('a', { href: r.signedUrl, target: '_blank', rel: 'noopener' }, isVideo(p) ? el('video', { src: r.signedUrl + '#t=0.1', muted: true, playsinline: true, preload: 'metadata' }) : el('img', { src: r.signedUrl, alt: 'Foto do cliente', loading: 'lazy' })));
+    }));
     const out = el('div', { class: 'actions' }); const note = el('p', { class: 'hint' });
     const waLink = el('a', { class: 'btn ok', target: '_blank', rel: 'noopener', hidden: true, text: 'Abrir conversa no WhatsApp' });
     const pdfLinks = el('div', { class: 'actions', hidden: true });
@@ -182,8 +187,9 @@
         const up = await db.storage.from('orcamentos-pdf').upload(path, blob, { contentType: 'application/pdf', upsert: true });
         if (!up.error) { link = await signed('orcamentos-pdf', path, 604800); await db.from('orcamentos').update({ pdf_path: path }).eq('id', o.id); }
         const p = pay(vals.total);
-        const text = 'Olá, ' + o.nome.split(' ')[0] + '! Aqui é da FSA Clean. Segue o seu orçamento para a higienização de ' + o.tipo_estofado.toLowerCase() + ':\n\n' +
-          'Total: ' + brl(vals.total) + '\nPix' + (p.pixPct ? ' (com ' + p.pixPct + '% de desconto)' : '') + ': ' + brl(p.pix) + '\nCartão: até 3x de ' + brl(p.parcela) + '\nDinheiro: ' + brl(vals.total) +
+        const nref = o.numero ? String(o.numero).padStart(4, '0') : o.id.slice(0, 6).toUpperCase();
+        const text = 'Olá, ' + o.nome.split(' ')[0] + '! Aqui é da FSA Clean. Segue o seu orçamento técnico nº ' + nref + ' para a higienização de ' + o.tipo_estofado.toLowerCase() + ':\n\n' +
+          'Subtotal: ' + brl(vals.total) + '\nÀ vista (Pix ou dinheiro)' + (p.pixPct ? ' com ' + p.pixPct + '% de desconto' : '') + ': ' + brl(p.pix) + '\nCartão: até 3x de ' + brl(p.parcela) + ' (parcelamento com taxas da máquina)' +
           (link ? '\n\nOrçamento completo em PDF (link válido por 7 dias):\n' + link : '') + '\n\nQualquer dúvida, é só responder esta mensagem.';
         const full = phone.length <= 11 ? '55' + phone : phone;
         waLink.href = 'https://wa.me/' + full + '?text=' + encodeURIComponent(text); waLink.hidden = false;
@@ -192,12 +198,13 @@
     };
     const toCash = async (btn) => {
       const t = Math.max(0, sum()); const forma = prompt('Forma de pagamento (Pix, Cartão ou Dinheiro):', 'Pix'); if (forma === null) return;
+      const pp = pay(t); const valor = Math.round((/pix|dinheiro|vista/i.test(forma) ? pp.pix : t) * 100) / 100;
       const ex = await db.from('financeiro_entradas').select('id').eq('orcamento_id', o.id).limit(1);
       if (ex.data && ex.data.length && !confirm('Este orçamento já foi lançado no caixa. Lançar de novo?')) return;
       btn.disabled = true; await save();
-      const r = await db.from('financeiro_entradas').insert({ data: today(), descricao: ('Serviço - ' + o.nome + ' (' + o.tipo_estofado + ')').slice(0, 120), valor: t, forma_pagamento: forma.trim() || null, orcamento_id: o.id });
+      const r = await db.from('financeiro_entradas').insert({ data: today(), descricao: ('Serviço - ' + o.nome + ' (' + o.tipo_estofado + ')').slice(0, 120), valor, forma_pagamento: forma.trim() || null, orcamento_id: o.id });
       if (r.error) { btn.disabled = false; return msg(note, 'Não foi possível lançar no caixa.'); }
-      await db.from('orcamentos').update({ status: 'concluido' }).eq('id', o.id); status.value = 'concluido'; btn.disabled = false; msg(note, 'Entrada de ' + brl(t) + ' lançada no caixa.', true);
+      await db.from('orcamentos').update({ status: 'concluido' }).eq('id', o.id); status.value = 'concluido'; btn.disabled = false; msg(note, 'Entrada de ' + brl(valor) + ' lançada no caixa.', true);
     };
     const del = async () => {
       if (!confirm('Excluir este orçamento e as fotos enviadas? Não dá para desfazer.')) return;
@@ -214,16 +221,17 @@
     body.append(
       el('div', { class: 'mhead' }, el('div', {}, el('h2', { text: o.nome }), el('span', { class: 'muted small', text: 'Recebido em ' + fmtDT(o.created_at) })), el('button', { class: 'x', type: 'button', 'aria-label': 'Fechar', text: '\u00d7', onclick: closeDlg })),
       el('div', { class: 'kv' },
-        el('div', {}, el('span', { text: 'WhatsApp' }), el('a', { href: 'https://wa.me/' + (phone.length <= 11 ? '55' + phone : phone), target: '_blank', rel: 'noopener', text: o.whatsapp })),
+        el('div', {}, el('span', { text: 'WhatsApp' }), el('a', { href: 'https://wa.me/' + (phone.length <= 11 ? '55' + phone : phone), target: '_blank', rel: 'noopener', text: fmtPhone(o.whatsapp) })),
         el('div', {}, el('span', { text: 'Bairro' }), o.bairro),
         el('div', {}, el('span', { text: 'Estofado' }), o.tipo_estofado + (o.tamanho ? ' · ' + o.tamanho : '') + (o.quantidade > 1 && o.tipo_estofado !== 'Sofá' ? ' · ' + o.quantidade + ' un.' : '')),
         el('div', {}, el('span', { text: 'Tecido' }), o.tipo_tecido),
+        el('div', {}, el('span', { text: 'Última limpeza' }), o.ultima_limpeza || '—'),
         el('div', {}, el('span', { text: 'Pets ou manchas' }), o.pets_manchas ? 'Sim' : 'Não'),
         el('div', {}, el('span', { text: 'Observações do cliente' }), o.detalhes || '—')),
       (o.fotos || []).length ? photos : el('p', { class: 'hint', text: 'O cliente não enviou fotos ou vídeos.' }),
       el('h3', { text: 'Valores', style: 'font-size:1.05rem' }), missing,
       el('div', { class: 'calc' }, fld('preco_base', 'Preço base (tamanho do estofado)'), fld('taxa_bairro', 'Taxa do bairro'), fld('adicional_tecido', 'Adicional de tecido'), fld('adicional_pet', 'Adicional pets/manchas'), fld('outros', 'Outros acréscimos'), fld('desconto', 'Desconto')),
-      el('div', { class: 'total' }, el('span', { text: 'Total' }), totalOut), payBox,
+      el('div', { class: 'total' }, el('span', { text: 'Subtotal dos serviços' }), totalOut), payBox,
       el('div', { class: 'calc' }, el('label', {}, 'Status', status), el('label', {}, 'Observações (aparecem no PDF)', obs)),
       out, note, pdfLinks, waLink,
       el('div', { class: 'actions' }, el('button', { class: 'btn ok', type: 'button', text: 'Serviço concluído: lançar no caixa', onclick: (e) => toCash(e.currentTarget) }), el('button', { class: 'btn bad', type: 'button', text: 'Excluir', onclick: del })));
@@ -240,40 +248,113 @@
   };
   async function buildPdf(o) {
     const { jsPDF } = window.jspdf; const d = new jsPDF({ unit: 'mm', format: 'a4' });
-    const W = 210, M = 16, BLUE = [7, 60, 105], TURQ = [32, 192, 196], GRAY = [98, 116, 134];
-    try { d.addImage(await loadLogo(), 'JPEG', M, 12, 48, 25.1); } catch (_) { d.setFont('helvetica', 'bold'); d.setFontSize(20); d.setTextColor(...BLUE); d.text('FSA CLEAN', M, 24); }
-    d.setFont('helvetica', 'bold'); d.setFontSize(22); d.setTextColor(...BLUE); d.text('ORÇAMENTO', W - M, 22, { align: 'right' });
-    d.setFont('helvetica', 'normal'); d.setFontSize(9.5); d.setTextColor(...GRAY);
-    d.text('Nº ' + o.id.slice(0, 8).toUpperCase(), W - M, 29, { align: 'right' }); d.text('Data: ' + fmtDate(new Date()), W - M, 34, { align: 'right' });
-    d.setDrawColor(...TURQ); d.setLineWidth(0.9); d.line(M, 42, W - M, 42);
-    let y = 52;
-    d.setFont('helvetica', 'bold'); d.setFontSize(11); d.setTextColor(...BLUE); d.text('DADOS DO CLIENTE', M, y); y += 6;
-    d.setFont('helvetica', 'normal'); d.setFontSize(10.5); d.setTextColor(20, 45, 64);
-    d.text('Cliente: ' + o.nome, M, y); y += 5.5; d.text('WhatsApp: ' + o.whatsapp, M, y); y += 5.5; d.text('Bairro: ' + o.bairro + ' - Feira de Santana/BA', M, y); y += 11;
-    d.setFont('helvetica', 'bold'); d.setFontSize(11); d.setTextColor(...BLUE); d.text('SERVIÇO', M, y); y += 6;
-    d.setFont('helvetica', 'normal'); d.setFontSize(10.5); d.setTextColor(20, 45, 64);
-    const serv = 'Higienização de ' + o.tipo_estofado.toLowerCase() + (o.tamanho ? ' (' + o.tamanho + ')' : '') + (o.quantidade > 1 && o.tipo_estofado !== 'Sofá' ? ' - ' + o.quantidade + ' un.' : '') + ' - tecido ' + o.tipo_tecido + (o.pets_manchas ? ' - com pets/manchas' : '');
-    d.splitTextToSize(serv, W - 2 * M).forEach((l) => { d.text(l, M, y); y += 5.5; }); y += 6;
-    /* tabela de valores */
-    d.setFillColor(...BLUE); d.rect(M, y, W - 2 * M, 8, 'F'); d.setTextColor(255, 255, 255); d.setFont('helvetica', 'bold'); d.setFontSize(10);
-    d.text('Descrição', M + 3, y + 5.5); d.text('Valor', W - M - 3, y + 5.5, { align: 'right' }); y += 8;
-    const lines = [['Serviço (' + o.tipo_estofado + (o.tamanho ? ' ' + o.tamanho : '') + ')', o.preco_base]];
-    if (Number(o.taxa_bairro)) lines.push(['Taxa do bairro (' + o.bairro + ')', o.taxa_bairro]);
-    if (Number(o.adicional_tecido)) lines.push(['Adicional de tecido (' + o.tipo_tecido + ')', o.adicional_tecido]);
-    if (Number(o.adicional_pet)) lines.push(['Adicional pets/manchas', o.adicional_pet]);
-    if (Number(o.outros)) lines.push(['Outros acréscimos', o.outros]);
-    if (Number(o.desconto)) lines.push(['Desconto', -Number(o.desconto)]);
-    d.setFont('helvetica', 'normal'); d.setTextColor(20, 45, 64);
-    lines.forEach((r, i) => { if (i % 2 === 0) { d.setFillColor(241, 249, 252); d.rect(M, y, W - 2 * M, 8, 'F'); } d.text(r[0], M + 3, y + 5.5); d.text(brl(r[1]), W - M - 3, y + 5.5, { align: 'right' }); y += 8; });
-    d.setFillColor(...TURQ); d.rect(M, y + 2, W - 2 * M, 11, 'F'); d.setFont('helvetica', 'bold'); d.setFontSize(12.5); d.setTextColor(255, 255, 255);
-    d.text('TOTAL', M + 3, y + 9.5); d.text(brl(o.total), W - M - 3, y + 9.5, { align: 'right' }); y += 24;
-    const p = pay(Number(o.total));
-    d.setFontSize(11); d.setTextColor(...BLUE); d.text('FORMAS DE PAGAMENTO', M, y); y += 7; d.setFont('helvetica', 'normal'); d.setFontSize(10.5); d.setTextColor(20, 45, 64);
-    d.text('Pix' + (p.pixPct ? ' (com ' + p.pixPct + '% de desconto)' : '') + ':  ' + brl(p.pix), M, y); y += 6;
-    d.text('Cartão:  até 3x de ' + brl(p.parcela), M, y); y += 6; d.text('Dinheiro:  ' + brl(o.total), M, y); y += 10;
-    if (o.observacoes) { d.setFont('helvetica', 'bold'); d.setTextColor(...BLUE); d.text('OBSERVAÇÕES', M, y); y += 6; d.setFont('helvetica', 'normal'); d.setTextColor(20, 45, 64); d.splitTextToSize(o.observacoes, W - 2 * M).forEach((l) => { d.text(l, M, y); y += 5.5; }); }
-    d.setDrawColor(...TURQ); d.setLineWidth(0.5); d.line(M, 275, W - M, 275); d.setFont('helvetica', 'normal'); d.setFontSize(9); d.setTextColor(...GRAY);
-    d.text('FSA Clean - Limpeza de estofados - Feira de Santana/BA', W / 2, 281, { align: 'center' }); d.text('WhatsApp ' + WA_SITE + '  |  Instagram ' + IG_SITE, W / 2, 286, { align: 'center' });
+    const W = 210, H = 297, M = 14, CW = W - 2 * M;
+    const NAVY = [7, 60, 105], BLUE = [8, 111, 168], TURQ = [32, 192, 196], INK = [20, 45, 64], GRAY = [98, 116, 134], PALE = [241, 249, 252], LINE = [214, 229, 236], WHITE = [255, 255, 255];
+    const fill = (c) => d.setFillColor(c[0], c[1], c[2]), stroke = (c) => d.setDrawColor(c[0], c[1], c[2]);
+    const font = (st, sz, c) => { d.setFont('helvetica', st); d.setFontSize(sz); d.setTextColor(c[0], c[1], c[2]); };
+    const T = (s, x, y, opt) => d.text(String(s), x, y, opt);
+    const wrap = (s, w) => d.splitTextToSize(String(s), w);
+    const logo = await loadLogo().catch(() => null);
+    const ref = '#ORC-' + (o.numero ? String(o.numero).padStart(4, '0') : o.id.slice(0, 6).toUpperCase());
+    const m = (v) => brl(v);
+    const per = (o.quantidade > 0 ? Number(o.preco_base) / o.quantidade : Number(o.preco_base));
+    const sub = Math.max(0, Number(o.total)), p = pay(sub);
+
+    const footer = () => {
+      stroke(TURQ); d.setLineWidth(0.5); d.line(M, H - 16, W - M, H - 16);
+      font('normal', 8, GRAY); T('FSA Clean - Higienização de Estofados em Feira de Santana e Região  |  Atendimento Domiciliar', W / 2, H - 10, { align: 'center' });
+    };
+    const header = () => {
+      fill(NAVY); d.rect(0, 0, W, 40, 'F'); fill(TURQ); d.rect(0, 40, W, 1.6, 'F');
+      fill(WHITE); d.roundedRect(M, 6, 54, 28.5, 3, 3, 'F');
+      if (logo) d.addImage(logo, 'JPEG', M + 3, 7.9, 48, 25.1);
+      font('bold', 20, WHITE); T('ORÇAMENTO TÉCNICO', W - M, 18, { align: 'right' });
+      font('bold', 8.5, [159, 243, 236]); T('HIGIENIZAÇÃO E SANITIZAÇÃO DE ESTOFADOS', W - M, 25, { align: 'right' });
+      font('normal', 10, WHITE); T('Ref: ' + ref + '   |   Data: ' + fmtDate(new Date()), W - M, 33, { align: 'right' });
+    };
+    const miniHeader = () => {
+      fill(NAVY); d.rect(0, 0, W, 14, 'F'); fill(TURQ); d.rect(0, 14, W, 1, 'F');
+      font('bold', 10, WHITE); T('FSA CLEAN', M, 9.2); font('normal', 9, WHITE); T('Orçamento técnico ' + ref, W - M, 9.2, { align: 'right' });
+    };
+    let y = 0;
+    const newPage = () => { d.addPage(); miniHeader(); footer(); y = 24; };
+    const need = (h) => { if (y + h > H - 22) newPage(); };
+    const title = (t) => { need(14); fill(TURQ); d.rect(M, y, 1.6, 6.5, 'F'); font('bold', 11, NAVY); T(t, M + 4.5, y + 5); y += 11; };
+
+    header(); footer(); y = 50;
+    /* --- cliente / atendimento --- */
+    const boxW = (CW - 6) / 2, boxH = 40;
+    const box = (x, ttl, items) => {
+      fill(PALE); stroke(LINE); d.setLineWidth(0.3); d.roundedRect(x, y, boxW, boxH, 2.5, 2.5, 'FD');
+      font('bold', 9, BLUE); T(ttl, x + 4, y + 6.5);
+      items.forEach(([k, v], i) => { const yy = y + 13 + i * 9; font('normal', 7.5, GRAY); T(k.toUpperCase(), x + 4, yy); font('bold', 9.5, INK); T(wrap(v, boxW - 8)[0], x + 4, yy + 4.6); });
+    };
+    box(M, 'CLIENTE', [['Nome', o.nome], ['Telefone', fmtPhone(o.whatsapp)], ['Endereço', o.bairro + ' / Feira de Santana - BA']]);
+    box(M + boxW + 6, 'INFORMAÇÕES DO ATENDIMENTO', [['Validade da proposta', '7 dias'], ['Modalidade', 'Atendimento Domiciliar (Em trânsito)'], ['Técnico responsável', 'Equipe FSA Clean']]);
+    y += boxH + 9;
+
+    /* --- 1. serviços --- */
+    title('1. DESCRIÇÃO DOS SERVIÇOS SOLICITADOS');
+    const cx = { item: M + 3, det: M + 68, qtd: M + 124, unit: M + 150, sub: M + CW - 3 };
+    const thead = () => { fill(NAVY); d.rect(M, y, CW, 8, 'F'); font('bold', 7.5, WHITE); T('ITEM / ESTOFADO', cx.item, y + 5.2); T('TECIDO / DETALHES', cx.det, y + 5.2); T('QTD', cx.qtd, y + 5.2, { align: 'center' }); T('VALOR UNIT.', cx.unit, y + 5.2, { align: 'right' }); T('SUBTOTAL', cx.sub, y + 5.2, { align: 'right' }); y += 8; };
+    need(40); thead();
+    let zebra = 0;
+    const row = (ttl, subTtl, det, qtd, unit, subtotal) => {
+      const dl = det.flatMap((s) => wrap(s, 52)); const h = Math.max(subTtl ? 14 : 9.5, dl.length * 4.1 + 5);
+      need(h + 2); if (zebra++ % 2 === 0) { fill(PALE); d.rect(M, y, CW, h, 'F'); }
+      font('bold', 9.5, INK); T(ttl, cx.item, y + 5.6); if (subTtl) { font('normal', 8, GRAY); wrap(subTtl, 60).forEach((l, i) => T(l, cx.item, y + 10 + i * 3.8)); }
+      font('normal', 8.5, INK); dl.forEach((l, i) => T(l, cx.det, y + 5.2 + i * 4.1));
+      font('normal', 9, INK); T(String(qtd), cx.qtd, y + 5.6, { align: 'center' }); T(m(unit), cx.unit, y + 5.6, { align: 'right' }); font('bold', 9, INK); T(m(subtotal), cx.sub, y + 5.6, { align: 'right' });
+      stroke(LINE); d.setLineWidth(0.2); d.line(M, y + h, M + CW, y + h); y += h;
+    };
+    const T0 = o.tipo_estofado, SUBT = { 'Sofá': 'Lavagem a seco/extração profunda', 'Colchão': 'Eliminação de ácaros e fungos' }[T0] || 'Extração profunda';
+    const ITEM = { 'Sofá': 'Higienização de Sofá', 'Colchão': 'Higienização de Colchão', 'Cadeiras': 'Higienização de Cadeiras', 'Poltronas': 'Higienização de Poltronas', 'Automotivo': 'Higienização Automotiva' }[T0] || 'Higienização de Estofado';
+    const det = ['Tecido: ' + o.tipo_tecido]; if (o.tamanho) det.push(o.tamanho); if (o.pets_manchas) det.push('Pets/manchas: sim'); if (o.ultima_limpeza) det.push('Última limpeza: ' + o.ultima_limpeza);
+    row(ITEM, SUBT, det, o.quantidade, per, Number(o.preco_base));
+    if (Number(o.taxa_bairro)) row('Taxa de Deslocamento', '', [o.bairro], 1, Number(o.taxa_bairro), Number(o.taxa_bairro));
+    if (Number(o.adicional_tecido)) row('Adicional de tecido', '', [o.tipo_tecido], 1, Number(o.adicional_tecido), Number(o.adicional_tecido));
+    if (Number(o.adicional_pet)) row('Adicional pets/manchas', '', [], 1, Number(o.adicional_pet), Number(o.adicional_pet));
+    if (Number(o.outros)) row('Outros acréscimos', '', [], 1, Number(o.outros), Number(o.outros));
+    if (Number(o.desconto)) row('Desconto', '', [], 1, -Number(o.desconto), -Number(o.desconto));
+    y += 6;
+
+    /* --- totais + pagamento --- */
+    need(46);
+    const y0 = y, rx = M + CW;
+    font('normal', 9.5, INK); T('Subtotal dos Serviços:', rx - 36, y + 5, { align: 'right' }); T(m(sub), rx, y + 5, { align: 'right' });
+    let yy = y + 5;
+    if (p.pixPct) {
+      font('normal', 9, INK); ['Desconto Especial', '(Pagamento à vista / PIX - ' + String(p.pixPct).replace('.', ',') + '%):'].forEach((l, i) => T(l, rx - 36, y + 12 + i * 4.2, { align: 'right' }));
+      font('bold', 9.5, [10, 122, 74]); T('- ' + m(p.desc), rx, y + 12, { align: 'right' }); yy = y + 17;
+    }
+    fill(NAVY); d.roundedRect(rx - 100, yy + 4, 100, 13, 2.5, 2.5, 'F'); font('bold', 10, WHITE); T('VALOR TOTAL INVESTIDO', rx - 96, yy + 12.4); font('bold', 14, [159, 243, 236]); T(m(p.pix), rx - 3, yy + 13, { align: 'right' });
+    const bh = Math.max(30, yy + 17 - y0);
+    fill(PALE); stroke(LINE); d.setLineWidth(0.3); d.roundedRect(M, y0, 72, bh, 2.5, 2.5, 'FD');
+    font('bold', 9, BLUE); T('FORMAS DE PAGAMENTO', M + 4, y0 + 6.2); font('normal', 8.8, INK);
+    T('PIX / Dinheiro (à vista): ' + m(p.pix), M + 4, y0 + 12.5); T('Cartão de crédito: até 3x de ' + m(p.parcela), M + 4, y0 + 18); font('normal', 7.5, GRAY); T('(parcelamento com taxas da máquina)', M + 4, y0 + 23);
+    y = y0 + bh + 8;
+    if (o.observacoes) { const ol = wrap(o.observacoes, CW - 8); const h = ol.length * 4.4 + 11; need(h + 4); fill(PALE); stroke(LINE); d.roundedRect(M, y, CW, h, 2.5, 2.5, 'FD'); font('bold', 9, BLUE); T('OBSERVAÇÕES', M + 4, y + 6); font('normal', 9, INK); ol.forEach((l, i) => T(l, M + 4, y + 11.5 + i * 4.4)); y += h + 6; }
+
+    /* --- 2. processo --- */
+    newPage(); title('2. NOSSO PROCESSO DE HIGIENIZAÇÃO PROFISSIONAL');
+    const steps = [['01', 'Inspeção & Aspiração', 'Remoção de sujidades sólidas e poeira profunda com aspirador industrial.'], ['02', 'Aplicação do Produto', 'Detergentes bactericidas e biocidas regulamentados pela ANVISA.'], ['03', 'Escovação Técnica', 'Ação mecânica com escovas de cerdas macias para soltar a sujeira encrostada.'], ['04', 'Extração por Sucção', 'Remoção do produto, sujeira, ácaros, bactérias e enxágue do tecido.']];
+    const sw = (CW - 3 * 4) / 4;
+    steps.forEach((s, i) => { const x = M + i * (sw + 4); fill(PALE); stroke(LINE); d.setLineWidth(0.3); d.roundedRect(x, y, sw, 40, 2.5, 2.5, 'FD'); font('bold', 17, TURQ); T(s[0], x + 4, y + 10); font('bold', 9, NAVY); wrap(s[1], sw - 8).forEach((l, k) => T(l, x + 4, y + 17 + k * 4)); font('normal', 7.8, GRAY); wrap(s[2], sw - 8).forEach((l, k) => T(l, x + 4, y + 25 + k * 3.6)); });
+    y += 48;
+
+    /* --- 3. condições --- */
+    title('3. CONDIÇÕES E RECOMENDAÇÕES IMPORTANTES');
+    [['Tempo de Secagem', 'O estofado fica levemente úmido após a higienização, secando completamente em um período estimado de 4 a 8 horas (variando conforme a ventilação do local).'],
+     ['Remoção de Manchas', 'Garantimos a eliminação de até 99,9% de germes, bactérias e sujidades solúveis. Manchas antigas, marcas de desgaste do tecido ou queimaduras físicas podem não ser removidas 100%.'],
+     ['Condições de Pagamento', 'Aceitamos PIX com desconto, Cartões de Crédito/Débito (parcelamento com taxas da máquina) e Dinheiro.']].forEach(([k, v]) => {
+      const ls = wrap(v, CW - 6); need(ls.length * 4.3 + 12); font('bold', 9.5, NAVY); T(k + ':', M + 3, y + 4); font('normal', 9, INK); ls.forEach((l, i) => T(l, M + 3, y + 9 + i * 4.3)); y += ls.length * 4.3 + 11; });
+
+    /* --- contato --- */
+    y += 4; need(41);
+    fill(NAVY); d.roundedRect(M, y, CW, 39, 3, 3, 'F'); font('bold', 11.5, WHITE); T('Dúvidas ou Confirmação do Agendamento?', M + 7, y + 9);
+    font('normal', 9, [220, 240, 247]); wrap('Agradecemos a preferência! Caso tenha dúvidas, pode mandar WhatsApp em qualquer número que iremos atender:', CW - 14).forEach((l, i) => T(l, M + 7, y + 15.5 + i * 4.3));
+    font('bold', 7.5, [159, 243, 236]); T('WHATSAPP', M + 7, y + 25); T('WHATSAPP', M + CW / 2 + 7, y + 25);
+    font('bold', 15, WHITE); T('(75) 98151-6165', M + 7, y + 33); T('(75) 99255-0004', M + CW / 2 + 7, y + 33);
     return d;
   }
 

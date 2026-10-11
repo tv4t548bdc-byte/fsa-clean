@@ -122,7 +122,7 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   const err = $('qfError'), btn = $('qfSend'), btnLabel = $('qfSendLabel'), done = $('qfDone');
   const sizeBox = $('qfSizeBox'), qtyBox = $('qfQtyBox'), qtyOut = $('qfQty'), qtyLabel = $('qfQtyLabel');
   const fileInput = $('qfFiles'), grid = $('qfPreviews');
-  const MAX_FILES = 3, MAX_MB = 25;
+  const MAX_FILES = 20, MAX_MB = 25, MAX_TOTAL_MB = 100;
   const QTY = { 'Sofá': 'Quantos lugares tem o sofá?', 'Colchão': 'Quantos colchões?', 'Cadeiras': 'Quantas cadeiras?', 'Poltronas': 'Quantas poltronas?', 'Automotivo': 'Quantos bancos?' };
   const state = { qty: 1, tamanho: '', pets: null };
   let files = [], busy = false;
@@ -153,6 +153,7 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   /* arquivos: até 3, com pré-visualização */
   const render = () => {
     grid.textContent = '';
+    const cnt = $('qfCount'); if (cnt) cnt.textContent = files.length ? '· ' + files.length + ' de ' + MAX_FILES : '';
     files.forEach((f, i) => {
       const t = document.createElement('div'); t.className = 'q-thumb';
       const url = URL.createObjectURL(f);
@@ -171,6 +172,8 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
       if (files.length >= MAX_FILES) { msg = 'Você pode enviar até ' + MAX_FILES + ' arquivos.'; return; }
       if (f.size > MAX_MB * 1048576) { msg = 'Um arquivo passou de ' + MAX_MB + ' MB e não foi adicionado.'; return; }
       if (!/^(image|video)\//.test(f.type)) { msg = 'Envie apenas fotos ou vídeos.'; return; }
+      const est = [...files, f].reduce((s, x) => s + (x.type.startsWith('video/') ? x.size : Math.min(x.size, 1.5 * 1048576)), 0);
+      if (est > MAX_TOTAL_MB * 1048576) { msg = 'O total passou de ' + MAX_TOTAL_MB + ' MB. Remova algum vídeo ou envie menos arquivos.'; return; }
       files.push(f);
     });
     fileInput.value = ''; if (msg) fail(msg); render();
@@ -193,7 +196,7 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
     e.preventDefault();
     if (busy) return;
     if (form.site.value) { form.hidden = true; done.hidden = false; return; }   /* antispam (campo invisível) */
-    const nome = form.nome.value.trim(), bairro = form.bairro.value.trim(), tipo = form.tipo.value, tecido = form.tecido.value;
+    const nome = form.nome.value.trim(), bairro = form.bairro.value.trim(), tipo = form.tipo.value, tecido = form.tecido.value, limpeza = form.limpeza.value;
     let tel = form.whatsapp.value.replace(/\D/g, '');
     if (nome.length < 2) return fail('Informe o seu nome.');
     if (tel.length < 10 || tel.length > 11) return fail('Informe um WhatsApp válido, com DDD.');
@@ -201,27 +204,32 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
     if (!tipo) return fail('Escolha o tipo de estofado.');
     if (tipo === 'Colchão' && !state.tamanho) return fail('Escolha o tamanho do colchão.');
     if (!tecido) return fail('Escolha o tipo de tecido.');
+    if (!limpeza) return fail('Informe há quanto tempo o estofado não é limpo.');
     if (state.pets === null) return fail('Informe se possui pets ou manchas.');
     const db = window.fsaDb && window.fsaDb();
     if (!db) return fail('Não foi possível enviar agora. Tente novamente em instantes.');
     if (tel.length <= 11) tel = '55' + tel;
     busy = true; btn.disabled = true; err.hidden = true; btnLabel.textContent = 'Enviando...';
     try {
-      const id = uuid(), paths = [];
-      for (let i = 0; i < files.length; i++) {
-        btnLabel.textContent = 'Enviando arquivo ' + (i + 1) + ' de ' + files.length + '...';
-        const f = await shrink(files[i]);
-        const path = id + '/' + (i + 1) + '-' + Math.random().toString(36).slice(2, 8) + '.' + extOf(f);
-        const up = await db.storage.from('orcamentos-fotos').upload(path, f, { contentType: f.type, upsert: false });
-        if (up.error) throw up.error;
-        paths.push(path);
-      }
+      const id = uuid(), paths = new Array(files.length); let next = 0, doneN = 0;
+      const worker = async () => {
+        while (next < files.length) {
+          const i = next++;
+          const f = await shrink(files[i]);
+          const path = id + '/' + (i + 1) + '-' + Math.random().toString(36).slice(2, 8) + '.' + extOf(f);
+          const up = await db.storage.from('orcamentos-fotos').upload(path, f, { contentType: f.type, upsert: false });
+          if (up.error) throw up.error;
+          paths[i] = path; doneN++;
+          btnLabel.textContent = 'Enviando arquivos (' + doneN + ' de ' + files.length + ')...';
+        }
+      };
+      if (files.length) { btnLabel.textContent = 'Enviando arquivos...'; await Promise.all(Array.from({ length: Math.min(3, files.length) }, worker)); }
       btnLabel.textContent = 'Finalizando...';
       const ins = await db.from('orcamentos').insert({
         id, nome, whatsapp: tel, bairro, tipo_estofado: tipo,
         quantidade: QTY[tipo] ? state.qty : 1,
         tamanho: tipo === 'Colchão' ? state.tamanho : (tipo === 'Sofá' ? state.qty + ' lugares' : null),
-        tipo_tecido: tecido, pets_manchas: !!state.pets,
+        tipo_tecido: tecido, ultima_limpeza: limpeza, pets_manchas: !!state.pets,
         detalhes: form.detalhes.value.trim() || null, fotos: paths
       });
       if (ins.error) throw ins.error;
