@@ -120,27 +120,63 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   if (!form) return;
   const $ = (id) => document.getElementById(id);
   const err = $('qfError'), btn = $('qfSend'), btnLabel = $('qfSendLabel'), done = $('qfDone');
-  const sizeBox = $('qfSizeBox'), qtyBox = $('qfQtyBox'), qtyOut = $('qfQty'), qtyLabel = $('qfQtyLabel');
   const fotosInput = $('qfFiles'), grid = $('qfPreviews');
   const MAX_FILES = 20, MAX_MB = 25, MAX_TOTAL_MB = 100;
-  const QTY = { 'Sofá': 'Quantos lugares tem o sofá?', 'Colchão': 'Quantos colchões?', 'Cadeiras': 'Quantas cadeiras?', 'Poltronas': 'Quantas poltronas?', 'Automotivo': 'Quantos bancos?' };
-  const state = { qty: 1, tamanho: '', pets: null, manchas: null };
+  const state = { pets: null, manchas: null };
   let files = [], busy = false;
 
   const chips = (id) => [...document.querySelectorAll('#' + id + ' .q-chip')];
   const fail = (m) => { err.textContent = m; err.hidden = false; err.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
-  const setQty = (n) => { state.qty = Math.max(1, Math.min(30, n)); qtyOut.textContent = state.qty; };
 
-  form.tipo.addEventListener('change', () => {
-    const t = form.tipo.value;
-    sizeBox.hidden = t !== 'Colchão';
-    qtyBox.hidden = !QTY[t];
-    if (QTY[t]) qtyLabel.textContent = QTY[t];
-    setQty(t === 'Sofá' ? 3 : 1); err.hidden = true;
-  });
-  $('qfMinus').addEventListener('click', () => setQty(state.qty - 1));
-  $('qfPlus').addEventListener('click', () => setQty(state.qty + 1));
-  chips('qfTamanho').forEach((c) => c.addEventListener('click', () => { chips('qfTamanho').forEach(x => x.setAttribute('aria-pressed', String(x === c))); state.tamanho = c.textContent; err.hidden = true; }));
+  /* ---- vários itens no mesmo pedido (pacote) ---- */
+  const TIPOS = ['Sofá', 'Colchão', 'Cadeiras', 'Poltronas', 'Automotivo', 'Outro'];
+  const QTYLABEL = { 'Sofá': 'Quantos lugares tem o sofá?', 'Colchão': 'Quantos colchões?', 'Cadeiras': 'Quantas cadeiras?', 'Poltronas': 'Quantas poltronas?', 'Automotivo': 'Quantos bancos?' };
+  const QTYDEF = { 'Sofá': 3, 'Colchão': 1, 'Cadeiras': 4, 'Poltronas': 1, 'Automotivo': 1 };
+  const SIZES = ['Solteiro', 'Casal', 'Queen', 'King', 'Não sei informar'];
+  const MAX_ITENS = 8;
+  const itens = [];                                   /* { tipo, qty, tamanho, descricao } */
+  const itensBox = $('qfItens'), addBtn = $('qfAddItem');
+  const mk = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+  const buildDetail = (it, wrap) => {
+    wrap.textContent = '';
+    if (!it.tipo) return;
+    if (it.tipo === 'Colchão') {
+      wrap.append(mk('span', 'qf-label', 'Tamanho do colchão'));
+      const cb = mk('div', 'q-chips');
+      SIZES.forEach((sz) => {
+        const c = mk('button', 'q-chip', sz); c.type = 'button'; c.setAttribute('aria-pressed', String(it.tamanho === sz));
+        c.addEventListener('click', () => { it.tamanho = sz; [...cb.children].forEach((x) => x.setAttribute('aria-pressed', String(x === c))); err.hidden = true; });
+        cb.append(c);
+      });
+      wrap.append(cb);
+    }
+    if (it.tipo === 'Outro') {
+      const lab = mk('label', 'qf-itemlabel', 'Descreva o item'), inp = mk('input'); inp.type = 'text'; inp.maxLength = 40; inp.placeholder = 'Ex.: puff, cabeceira, banco de moto'; inp.value = it.descricao || '';
+      inp.addEventListener('input', () => { it.descricao = inp.value; }); lab.append(inp); wrap.append(lab); return;
+    }
+    wrap.append(mk('span', 'qf-label', QTYLABEL[it.tipo] + (it.tipo === 'Colchão' ? '' : '')));
+    const st = mk('div', 'q-stepper'), minus = mk('button', null, '\u2212'), out = mk('output', null, String(it.qty)), plus = mk('button', null, '+');
+    minus.type = 'button'; plus.type = 'button'; minus.setAttribute('aria-label', 'Diminuir'); plus.setAttribute('aria-label', 'Aumentar');
+    const set = (n) => { it.qty = Math.max(1, Math.min(30, n)); out.textContent = it.qty; };
+    minus.addEventListener('click', () => set(it.qty - 1)); plus.addEventListener('click', () => set(it.qty + 1));
+    st.append(minus, out, plus); wrap.append(st);
+  };
+  const refreshItems = () => { addBtn.hidden = itens.length >= MAX_ITENS; [...itensBox.children].forEach((r) => { r.querySelector('.qi-del').hidden = itens.length <= 1; }); };
+  const addItem = () => {
+    if (itens.length >= MAX_ITENS) return;
+    const it = { tipo: '', qty: 1, tamanho: '', descricao: '' }; itens.push(it);
+    const row = mk('div', 'qf-item'), head = mk('div', 'qf-item-head'), sel = mk('select'), detail = mk('div', 'qf-sub');
+    sel.setAttribute('aria-label', 'Tipo de estofado');
+    const o0 = mk('option', null, 'Selecione o tipo de estofado'); o0.value = ''; sel.append(o0);
+    TIPOS.forEach((t) => sel.append(mk('option', null, t)));
+    const del = mk('button', 'qi-del', '\u00d7'); del.type = 'button'; del.setAttribute('aria-label', 'Remover item');
+    sel.addEventListener('change', () => { it.tipo = sel.value; it.qty = QTYDEF[it.tipo] || 1; it.tamanho = ''; it.descricao = ''; buildDetail(it, detail); err.hidden = true; });
+    del.addEventListener('click', () => { if (itens.length <= 1) return; itens.splice(itens.indexOf(it), 1); row.remove(); refreshItems(); });
+    head.append(sel, del); row.append(head, detail); itensBox.append(row); refreshItems();
+  };
+  addBtn.addEventListener('click', addItem); addItem();
+  const itemText = (it) => it.tipo + (it.tipo === 'Colchão' ? ' ' + it.tamanho : '') + (it.tipo === 'Outro' ? ' (' + it.descricao.trim() + ')' : '') + (it.tipo === 'Sofá' ? ' (' + it.qty + ' lugares)' : (it.tipo !== 'Outro' && it.qty > 1 ? ' x' + it.qty : ''));
+
   chips('qfPets').forEach((c, i) => c.addEventListener('click', () => { chips('qfPets').forEach(x => x.setAttribute('aria-pressed', String(x === c))); state.pets = i === 0; err.hidden = true; }));
   chips('qfManchas').forEach((c, i) => c.addEventListener('click', () => { chips('qfManchas').forEach(x => x.setAttribute('aria-pressed', String(x === c))); state.manchas = i === 0; err.hidden = true; }));
 
@@ -221,13 +257,17 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
       fail('Anexe pelo menos 1 foto do estofado para solicitar o orçamento.');
       return;
     }
-    const nome = form.nome.value.trim(), bairro = form.bairro.value.trim(), tipo = form.tipo.value, tecido = form.tecido.value, limpeza = form.limpeza.value;
+    const nome = form.nome.value.trim(), bairro = form.bairro.value.trim(), tecido = form.tecido.value, limpeza = form.limpeza.value;
     let tel = form.whatsapp.value.replace(/\D/g, '');
     if (nome.length < 2) return fail('Informe o seu nome.');
     if (tel.length < 10 || tel.length > 11) return fail('Informe um WhatsApp válido, com DDD.');
     if (bairro.length < 2) return fail('Informe o seu bairro.');
-    if (!tipo) return fail('Escolha o tipo de estofado.');
-    if (tipo === 'Colchão' && !state.tamanho) return fail('Escolha o tamanho do colchão.');
+    for (let i = 0; i < itens.length; i++) {
+      const it = itens[i], n = itens.length > 1 ? ' do item ' + (i + 1) : '';
+      if (!it.tipo) return fail('Escolha o tipo de estofado' + n + '.');
+      if (it.tipo === 'Colchão' && !it.tamanho) return fail('Escolha o tamanho do colchão' + n + '.');
+      if (it.tipo === 'Outro' && it.descricao.trim().length < 2) return fail('Descreva o item' + (itens.length > 1 ? ' ' + (i + 1) : '') + '.');
+    }
     if (!tecido) return fail('Escolha o tipo de tecido.');
     if (!limpeza) return fail('Informe há quanto tempo o estofado não é limpo.');
     if (state.pets === null) return fail('Informe se possui pets.');
@@ -252,15 +292,22 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
       btnLabel.textContent = 'Enviando arquivos...'; await Promise.all(Array.from({ length: Math.min(3, files.length) }, worker));
       if (paths.length < 1 || paths.some((x) => !x)) throw new Error('sem foto');   /* última barreira: nada vai ao banco sem foto */
       btnLabel.textContent = 'Finalizando...';
+      const itensPayload = itens.map((it) => {
+        const o = { tipo: it.tipo, quantidade: it.tipo === 'Outro' ? 1 : it.qty };
+        if (it.tipo === 'Colchão') o.tamanho = it.tamanho; if (it.tipo === 'Sofá') o.tamanho = it.qty + ' lugares'; if (it.tipo === 'Outro') o.descricao = it.descricao.trim().slice(0, 40);
+        return o;
+      });
+      const um = itens.length === 1, i0 = itens[0];
+      const resumoTipo = um ? i0.tipo : 'Pacote (' + itens.length + ' itens)';
+      const resumoQtd = um ? (i0.tipo === 'Outro' ? 1 : i0.qty) : itens.length;
+      const resumoTam = um ? (i0.tipo === 'Colchão' ? i0.tamanho : (i0.tipo === 'Sofá' ? i0.qty + ' lugares' : null)) : null;
       const ins = await db.from('orcamentos').insert({
-        id, nome, whatsapp: tel, bairro, tipo_estofado: tipo,
-        quantidade: QTY[tipo] ? state.qty : 1,
-        tamanho: tipo === 'Colchão' ? state.tamanho : (tipo === 'Sofá' ? state.qty + ' lugares' : null),
+        id, nome, whatsapp: tel, bairro, tipo_estofado: resumoTipo, quantidade: resumoQtd, tamanho: resumoTam, itens: itensPayload,
         tipo_tecido: tecido, ultima_limpeza: limpeza, tem_pets: !!state.pets, tem_manchas: !!state.manchas,
         detalhes: form.detalhes.value.trim() || null, fotos: paths
       });
       if (ins.error) throw ins.error;
-      notifyEmail({ nome, bairro, tipo, tecido, n: paths.length, pets: !!state.pets, manchas: !!state.manchas });
+      notifyEmail({ nome, bairro, tipo: itens.map(itemText).join(' + '), tecido, n: paths.length, pets: !!state.pets, manchas: !!state.manchas });
       form.hidden = true; done.hidden = false; done.scrollIntoView({ block: 'center', behavior: 'smooth' });
     } catch (_) {
       fail('Não foi possível enviar agora. Confira sua conexão e tente novamente.');

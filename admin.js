@@ -36,7 +36,7 @@
   const enter = async (session) => {
     const { data, error } = await db.rpc('is_admin');
     if (error || data !== true) { await db.auth.signOut(); return showLogin('Este usuário não tem permissão de acesso ao painel.'); }
-    $('who').textContent = session.user.email + ' · v4'; $('login').hidden = true; $('app').hidden = false;
+    $('who').textContent = session.user.email + ' · v5'; $('login').hidden = true; $('app').hidden = false;
     await loadPrices(); await ensurePrices(); loadLogo().catch(() => null); loadOrc(); refreshBadges();
   };
   const boot = async () => {
@@ -125,7 +125,7 @@
     if (!data.length) box.append(el('p', { class: 'muted', text: 'Nenhuma solicitação por aqui ainda.' }));
     data.forEach((o) => box.append(el('div', { class: 'card item', onclick: () => openOrc(o.id) },
       el('div', {}, el('b', { text: o.nome }),
-        el('span', { class: 'meta', text: [o.tipo_estofado + (o.tamanho ? ' ' + o.tamanho : (o.quantidade > 1 ? ' x' + o.quantidade : '')), o.bairro, fmtDT(o.created_at), (o.fotos || []).length + ' arquivo(s)'].join(' · ') })),
+        el('span', { class: 'meta', text: [orcResumo(o), o.bairro, fmtDT(o.created_at), (o.fotos || []).length + ' arquivo(s)'].join(' · ') })),
       el('div', { style: 'text-align:right' }, el('span', { class: 'st ' + o.status, text: STATUS[o.status] }), o.total != null ? el('div', { class: 'small', text: brl(o.total), style: 'font-weight:700;margin-top:4px' }) : null))));
     refreshBadges();
   };
@@ -134,10 +134,16 @@
   /* ---------- orçamentos: calculadora ---------- */
   const BASE_KEY = { 'Sofá': 'Sofá (por lugar)', 'Cadeiras': 'Cadeiras (por unidade)', 'Poltronas': 'Poltronas (por unidade)', 'Automotivo': 'Automotivo (por banco)', 'Outro': 'Outro' };
   const lookup = (group, name) => { const k = Object.keys(P[group]).find((x) => norm(x) === norm(name)); return k === undefined ? null : P[group][k]; };
+  /* itens do pedido: usa a lista "itens" (pacote) ou, em orçamentos antigos, os campos únicos */
+  const itensOf = (o) => (Array.isArray(o.itens) && o.itens.length) ? o.itens.map((x) => ({ ...x })) : [{ tipo: o.tipo_estofado, quantidade: o.quantidade || 1, tamanho: o.tamanho || null }];
+  const itemLabel = (it) => it.tipo + (it.tipo === 'Outro' && it.descricao ? ' (' + it.descricao + ')' : '') + (it.tamanho ? ' · ' + it.tamanho : '') + (it.quantidade > 1 && it.tipo !== 'Sofá' && it.tipo !== 'Outro' ? ' · ' + it.quantidade + ' un.' : '');
+  const orcResumo = (o) => itensOf(o).map(itemLabel).join(' + ');
+  const suggestItem = (it) => {
+    if (it.tipo === 'Colchão') return (lookup('base', 'Colchão ' + (it.tamanho || '')) || 0) * (it.quantidade || 1);
+    return (P.base[BASE_KEY[it.tipo]] || 0) * (it.tipo === 'Outro' ? 1 : (it.quantidade || 1));
+  };
   const suggest = (o) => {
-    let base = 0;
-    if (o.tipo_estofado === 'Colchão') base = (lookup('base', 'Colchão ' + (o.tamanho || '')) || 0) * o.quantidade;
-    else base = (P.base[BASE_KEY[o.tipo_estofado]] || 0) * (o.tipo_estofado === 'Outro' ? 1 : o.quantidade);
+    const base = itensOf(o).reduce((s, it) => s + suggestItem(it), 0);
     const bairro = lookup('bairro', o.bairro); const taxa = bairro !== null ? bairro : (P.bairro['Padrão'] || 0);
     return { preco_base: base, taxa_bairro: taxa, adicional_tecido: lookup('tecido', o.tipo_tecido) || 0, adicional_pet: o.tem_pets ? (P.extra['Adicional Pets'] || 0) : 0, adicional_manchas: o.tem_manchas ? (P.extra['Adicional Manchas'] || 0) : 0 };
   };
@@ -160,13 +166,17 @@
     await loadPrices(); await loadLogo().catch(() => null);
     const fresh = o.preco_base === null;               /* ainda não calculado => sugere */
     const sg = suggest(o);
+    const itens = itensOf(o);
+    const itemIn = itens.map((it) => el('input', { inputmode: 'decimal', value: numIn(fresh || it.valor === undefined ? suggestItem(it) : it.valor), 'aria-label': 'Valor: ' + itemLabel(it) }));
+    itemIn.forEach((i) => i.addEventListener('input', () => recalc()));
     const v = { preco_base: fresh ? sg.preco_base : o.preco_base, taxa_bairro: fresh ? sg.taxa_bairro : o.taxa_bairro, adicional_tecido: fresh ? sg.adicional_tecido : o.adicional_tecido, adicional_pet: fresh ? sg.adicional_pet : o.adicional_pet, adicional_manchas: fresh ? sg.adicional_manchas : (o.adicional_manchas || 0), outros: o.outros, desconto: o.desconto };
-    const f = {}; const fld = (key, label) => { f[key] = el('input', { inputmode: 'decimal', value: numIn(v[key]) }); f[key].addEventListener('input', recalc); return el('label', {}, label, f[key]); };
+    const f = { preco_base: el('input') };      /* preço base = soma dos itens (campo interno) */
+    const fld = (key, label) => { f[key] = el('input', { inputmode: 'decimal', value: numIn(v[key]) }); f[key].addEventListener('input', recalc); return el('label', {}, label, f[key]); };
     const totalOut = el('b', { text: brl(0) }), payBox = el('div', { class: 'hint' });
     const status = el('select', {}, ...Object.keys(STATUS).slice(0, 6).map((s) => el('option', { value: s, text: STATUS[s], selected: s === (o.status === 'novo' ? 'em_analise' : o.status) })));
     const obs = el('textarea', { rows: 2, maxlength: 400, placeholder: 'Aparece no PDF (ex.: prazo, condições)' }); obs.value = o.observacoes || '';
     const sum = () => ['preco_base', 'taxa_bairro', 'adicional_tecido', 'adicional_pet', 'adicional_manchas', 'outros'].reduce((s, k) => s + num(f[k].value), 0) - num(f.desconto.value);
-    function recalc() { const t = Math.max(0, sum()); totalOut.textContent = brl(t); const p = pay(t); payBox.textContent = 'À vista (Pix ou dinheiro)' + (p.pixPct ? ' com ' + p.pixPct + '% de desconto' : '') + ': ' + brl(p.pix) + ' · Cartão até 3x de ' + brl(p.parcela); }
+    function recalc() { f.preco_base.value = numIn(itemIn.reduce((s, i) => s + num(i.value), 0)); const t = Math.max(0, sum()); totalOut.textContent = brl(t); const p = pay(t); payBox.textContent = 'À vista (Pix ou dinheiro)' + (p.pixPct ? ' com ' + p.pixPct + '% de desconto' : '') + ': ' + brl(p.pix) + ' · Cartão até 3x de ' + brl(p.parcela); }
     const photos = el('div', { class: 'photos' });
     if ((o.fotos || []).length) db.storage.from('orcamentos-fotos').createSignedUrls(o.fotos, 3600).then(({ data }) => (data || []).forEach((r, i) => {
       if (!r || !r.signedUrl) return; const p = o.fotos[i] || '';
@@ -176,8 +186,8 @@
     const waLink = el('a', { class: 'btn ok', target: '_blank', rel: 'noopener', hidden: true, text: 'Abrir conversa no WhatsApp' });
     const pdfLinks = el('div', { class: 'actions', hidden: true });
 
-    const values = () => ({ preco_base: num(f.preco_base.value), taxa_bairro: num(f.taxa_bairro.value), adicional_tecido: num(f.adicional_tecido.value), adicional_pet: num(f.adicional_pet.value), adicional_manchas: num(f.adicional_manchas.value), outros: num(f.outros.value), desconto: num(f.desconto.value), total: Math.max(0, Math.round(sum() * 100) / 100), status: status.value, observacoes: obs.value.trim() || null, atualizado_em: new Date().toISOString() });
-    const save = async (quiet) => { const { error } = await db.from('orcamentos').update(values()).eq('id', o.id); if (error) { msg(note, 'Não foi possível salvar. Confira se o SQL "supabase-atualizacao-2" foi executado no Supabase.'); return false; } if (!quiet) msg(note, 'Salvo!', true); return true; };
+    const values = () => ({ itens: itens.map((it, i) => ({ ...it, valor: num(itemIn[i].value) })), preco_base: itemIn.reduce((s, i) => s + num(i.value), 0), taxa_bairro: num(f.taxa_bairro.value), adicional_tecido: num(f.adicional_tecido.value), adicional_pet: num(f.adicional_pet.value), adicional_manchas: num(f.adicional_manchas.value), outros: num(f.outros.value), desconto: num(f.desconto.value), total: Math.max(0, Math.round(sum() * 100) / 100), status: status.value, observacoes: obs.value.trim() || null, atualizado_em: new Date().toISOString() });
+    const save = async (quiet) => { const { error } = await db.from('orcamentos').update(values()).eq('id', o.id); if (error) { msg(note, 'Não foi possível salvar. Confira se o SQL "supabase-atualizacao-3" foi executado no Supabase.'); return false; } if (!quiet) msg(note, 'Salvo!', true); return true; };
 
     const phone = (o.whatsapp || '').replace(/\D/g, '');
     const WA_TEXT = (nome) => 'Olá, ' + nome + '! Tudo bem?\nAqui é da FSA Clean! \u{1F9FC}\nJá preparamos o seu orçamento detalhado de higienização. Estou enviando em anexo o arquivo PDF com todos os valores e condições.\nQualquer dúvida estou à disposição!';
@@ -205,7 +215,7 @@
       const ex = await db.from('financeiro_entradas').select('id').eq('orcamento_id', o.id).limit(1);
       if (ex.data && ex.data.length && !confirm('Este orçamento já foi lançado no caixa. Lançar de novo?')) return;
       btn.disabled = true; await save();
-      const r = await db.from('financeiro_entradas').insert({ data: today(), descricao: ('Serviço - ' + o.nome + ' (' + o.tipo_estofado + ')').slice(0, 120), valor, forma_pagamento: forma.trim() || null, orcamento_id: o.id });
+      const r = await db.from('financeiro_entradas').insert({ data: today(), descricao: ('Serviço - ' + o.nome + ' (' + orcResumo(o) + ')').slice(0, 120), valor, forma_pagamento: forma.trim() || null, orcamento_id: o.id });
       if (r.error) { btn.disabled = false; return msg(note, 'Não foi possível lançar no caixa.'); }
       await db.from('orcamentos').update({ status: 'concluido' }).eq('id', o.id); status.value = 'concluido'; btn.disabled = false; msg(note, 'Entrada de ' + brl(valor) + ' lançada no caixa.', true);
     };
@@ -217,7 +227,7 @@
     };
     const missing = fresh && sg.preco_base === 0 ? el('p', { class: 'hint', text: 'Dica: a sugestão ficou em R$ 0,00 porque a aba Preços ainda não foi preenchida. Você pode digitar os valores aqui mesmo.' }) : document.createComment('sem dica');
 
-    out.append(el('button', { class: 'btn ghost', type: 'button', text: 'Sugerir de novo', onclick: () => { const s = suggest(o); ['preco_base', 'taxa_bairro', 'adicional_tecido', 'adicional_pet', 'adicional_manchas'].forEach((k) => { f[k].value = numIn(s[k]); }); recalc(); } }),
+    out.append(el('button', { class: 'btn ghost', type: 'button', text: 'Sugerir de novo', onclick: () => { const s = suggest(o); itens.forEach((it, i) => { itemIn[i].value = numIn(suggestItem(it)); }); ['taxa_bairro', 'adicional_tecido', 'adicional_pet', 'adicional_manchas'].forEach((k) => { f[k].value = numIn(s[k]); }); recalc(); } }),
       el('button', { class: 'btn', type: 'button', text: 'Salvar', onclick: () => save() }),
       el('button', { class: 'btn', type: 'button', text: 'Gerar PDF e abrir WhatsApp', onclick: (e) => gen(e.currentTarget) }));
     body.textContent = '';
@@ -226,7 +236,7 @@
       el('div', { class: 'kv' },
         el('div', {}, el('span', { text: 'WhatsApp' }), el('a', { href: 'https://wa.me/' + (phone.length <= 11 ? '55' + phone : phone), target: '_blank', rel: 'noopener', text: fmtPhone(o.whatsapp) })),
         el('div', {}, el('span', { text: 'Bairro' }), o.bairro),
-        el('div', {}, el('span', { text: 'Estofado' }), o.tipo_estofado + (o.tamanho ? ' · ' + o.tamanho : '') + (o.quantidade > 1 && o.tipo_estofado !== 'Sofá' ? ' · ' + o.quantidade + ' un.' : '')),
+        el('div', {}, el('span', { text: itens.length > 1 ? 'Itens do pedido (' + itens.length + ')' : 'Estofado' }), ...itens.map((it) => el('div', { text: (itens.length > 1 ? '• ' : '') + itemLabel(it) }))),
         el('div', {}, el('span', { text: 'Tecido' }), o.tipo_tecido),
         el('div', {}, el('span', { text: 'Última limpeza' }), o.ultima_limpeza || '—'),
         el('div', {}, el('span', { text: 'Possui pets?' }), o.tem_pets ? 'Sim' : 'Não'),
@@ -235,7 +245,8 @@
         el('div', {}, el('span', { text: 'Observações do cliente' }), o.detalhes || '—')),
       (o.fotos || []).length ? photos : el('p', { class: 'hint', text: 'O cliente não enviou fotos ou vídeos.' }),
       el('h3', { text: 'Valores', style: 'font-size:1.05rem' }), missing,
-      el('div', { class: 'calc' }, fld('preco_base', 'Preço base (tamanho do estofado)'), fld('taxa_bairro', 'Taxa do bairro'), fld('adicional_tecido', 'Adicional de tecido'), fld('adicional_pet', 'Adicional pets'), fld('adicional_manchas', 'Adicional manchas'), fld('outros', 'Outros acréscimos'), fld('desconto', 'Desconto')),
+      el('div', { class: 'span-all' }, el('span', { class: 'hint', text: itens.length > 1 ? 'Valor de cada item do pacote (a soma vira o preço base):' : 'Valor do serviço:', style: 'display:block;margin-bottom:6px' }), ...itens.map((it, i) => el('label', { style: 'margin-bottom:8px' }, itemLabel(it), itemIn[i]))),
+      el('div', { class: 'calc' }, fld('taxa_bairro', 'Taxa do bairro'), fld('adicional_tecido', 'Adicional de tecido'), fld('adicional_pet', 'Adicional pets'), fld('adicional_manchas', 'Adicional manchas'), fld('outros', 'Outros acréscimos'), fld('desconto', 'Desconto')),
       el('div', { class: 'total' }, el('span', { text: 'Subtotal dos serviços' }), totalOut), payBox,
       el('div', { class: 'calc' }, el('label', {}, 'Status', status), el('label', {}, 'Observações (aparecem no PDF)', obs)),
       out, note, pdfLinks, waLink,
@@ -262,7 +273,6 @@
     const logo = logoData;
     const ref = '#ORC-' + (o.numero ? String(o.numero).padStart(4, '0') : o.id.slice(0, 6).toUpperCase());
     const m = (v) => brl(v);
-    const per = (o.quantidade > 0 ? Number(o.preco_base) / o.quantidade : Number(o.preco_base));
     const sub = Math.max(0, Number(o.total)), p = pay(sub);
 
     const footer = () => {
@@ -312,10 +322,17 @@
       font('normal', 9, INK); T(String(qtd), cx.qtd, y + 5.6, { align: 'center' }); T(m(unit), cx.unit, y + 5.6, { align: 'right' }); font('bold', 9, INK); T(m(subtotal), cx.sub, y + 5.6, { align: 'right' });
       stroke(LINE); d.setLineWidth(0.2); d.line(M, y + h, M + CW, y + h); y += h;
     };
-    const T0 = o.tipo_estofado, SUBT = { 'Sofá': 'Lavagem a seco/extração profunda', 'Colchão': 'Eliminação de ácaros e fungos' }[T0] || 'Extração profunda';
-    const ITEM = { 'Sofá': 'Higienização de Sofá', 'Colchão': 'Higienização de Colchão', 'Cadeiras': 'Higienização de Cadeiras', 'Poltronas': 'Higienização de Poltronas', 'Automotivo': 'Higienização Automotiva' }[T0] || 'Higienização de Estofado';
-    const det = ['Tecido: ' + o.tipo_tecido]; if (o.tamanho) det.push(o.tamanho); if (o.tem_pets) det.push('Pets: sim'); if (o.tem_manchas) det.push('Manchas: sim'); if (o.pets_manchas && !o.tem_pets && !o.tem_manchas) det.push('Pets/manchas: sim'); if (o.ultima_limpeza) det.push('Última limpeza: ' + o.ultima_limpeza);
-    row(ITEM, SUBT, det, o.quantidade, per, Number(o.preco_base));
+    const ITEMNAME = { 'Sofá': 'Higienização de Sofá', 'Colchão': 'Higienização de Colchão', 'Cadeiras': 'Higienização de Cadeiras', 'Poltronas': 'Higienização de Poltronas', 'Automotivo': 'Higienização Automotiva' };
+    const SUBTT = { 'Sofá': 'Lavagem a seco/extração profunda', 'Colchão': 'Eliminação de ácaros e fungos' };
+    const lista = itensOf(o);
+    lista.forEach((it, i) => {
+      const nome = ITEMNAME[it.tipo] || ('Higienização de ' + (it.descricao || 'Estofado'));
+      const valor = it.valor !== undefined ? Number(it.valor) : (lista.length === 1 ? Number(o.preco_base) : 0);
+      const qtd = it.quantidade > 0 ? it.quantidade : 1;
+      const det = ['Tecido: ' + o.tipo_tecido]; if (it.tamanho) det.push(it.tamanho); if (it.tipo === 'Outro' && it.descricao) det.push(it.descricao);
+      if (i === 0) { if (o.tem_pets) det.push('Pets: sim'); if (o.tem_manchas) det.push('Manchas: sim'); if (o.pets_manchas && !o.tem_pets && !o.tem_manchas) det.push('Pets/manchas: sim'); if (o.ultima_limpeza) det.push('Última limpeza: ' + o.ultima_limpeza); }
+      row(nome, SUBTT[it.tipo] || 'Extração profunda', det, qtd, valor / qtd, valor);
+    });
     if (Number(o.taxa_bairro)) row('Taxa de Deslocamento', '', [o.bairro], 1, Number(o.taxa_bairro), Number(o.taxa_bairro));
     if (Number(o.adicional_tecido)) row('Adicional de tecido', '', [o.tipo_tecido], 1, Number(o.adicional_tecido), Number(o.adicional_tecido));
     if (Number(o.adicional_pet)) row('Adicional pets', '', [], 1, Number(o.adicional_pet), Number(o.adicional_pet));
