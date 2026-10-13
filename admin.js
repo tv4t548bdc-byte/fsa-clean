@@ -4,6 +4,8 @@
   const $ = (id) => document.getElementById(id);
   const WA_SITE = '(75) 98151-6165';
   const IG_SITE = '@fsa_clean';
+  /* >>> COLE AQUI o link (curto) de avaliações do Google da FSA Clean <<< */
+  const GOOGLE_REVIEW_URL = 'https://share.google/kWE2r1hAPfzMGmpIc';
   let db = null, P = { base: {}, bairro: {}, tecido: {}, extra: {} }, precoRows = [];
 
   /* ---------- utilitários ---------- */
@@ -36,7 +38,7 @@
   const enter = async (session) => {
     const { data, error } = await db.rpc('is_admin');
     if (error || data !== true) { await db.auth.signOut(); return showLogin('Este usuário não tem permissão de acesso ao painel.'); }
-    $('who').textContent = session.user.email + ' · v5'; $('login').hidden = true; $('app').hidden = false;
+    $('who').textContent = session.user.email + ' · v6'; $('login').hidden = true; $('app').hidden = false;
     await loadPrices(); await ensurePrices(); loadLogo().catch(() => null); loadOrc(); refreshBadges();
   };
   const boot = async () => {
@@ -185,6 +187,9 @@
     const out = el('div', { class: 'actions' }); const note = el('p', { class: 'hint' });
     const waLink = el('a', { class: 'btn ok', target: '_blank', rel: 'noopener', hidden: true, text: 'Abrir conversa no WhatsApp' });
     const pdfLinks = el('div', { class: 'actions', hidden: true });
+    const googleOk = /^https?:\/\/\S+$/i.test(GOOGLE_REVIEW_URL);
+    const googleBtn = el('a', { class: 'btn star', href: googleOk ? GOOGLE_REVIEW_URL : '#', target: '_blank', rel: 'noopener', text: '\u2B50 Pedir Avaliação no Google',
+      onclick: (e) => { if (!googleOk) { e.preventDefault(); alert('Cole o link de avaliações do Google na constante GOOGLE_REVIEW_URL, no início do arquivo admin.js.'); } } });
 
     const values = () => ({ itens: itens.map((it, i) => ({ ...it, valor: num(itemIn[i].value) })), preco_base: itemIn.reduce((s, i) => s + num(i.value), 0), taxa_bairro: num(f.taxa_bairro.value), adicional_tecido: num(f.adicional_tecido.value), adicional_pet: num(f.adicional_pet.value), adicional_manchas: num(f.adicional_manchas.value), outros: num(f.outros.value), desconto: num(f.desconto.value), total: Math.max(0, Math.round(sum() * 100) / 100), status: status.value, observacoes: obs.value.trim() || null, atualizado_em: new Date().toISOString() });
     const save = async (quiet) => { const { error } = await db.from('orcamentos').update(values()).eq('id', o.id); if (error) { msg(note, 'Não foi possível salvar. Confira se o SQL "supabase-atualizacao-3" foi executado no Supabase.'); return false; } if (!quiet) msg(note, 'Salvo!', true); return true; };
@@ -249,7 +254,7 @@
       el('div', { class: 'calc' }, fld('taxa_bairro', 'Taxa do bairro'), fld('adicional_tecido', 'Adicional de tecido'), fld('adicional_pet', 'Adicional pets'), fld('adicional_manchas', 'Adicional manchas'), fld('outros', 'Outros acréscimos'), fld('desconto', 'Desconto')),
       el('div', { class: 'total' }, el('span', { text: 'Subtotal dos serviços' }), totalOut), payBox,
       el('div', { class: 'calc' }, el('label', {}, 'Status', status), el('label', {}, 'Observações (aparecem no PDF)', obs)),
-      out, note, pdfLinks, waLink,
+      out, note, pdfLinks, el('div', { class: 'actions' }, waLink, googleBtn),
       el('div', { class: 'actions' }, el('button', { class: 'btn ok', type: 'button', text: 'Serviço concluído: lançar no caixa', onclick: (e) => toCash(e.currentTarget) }), el('button', { class: 'btn bad', type: 'button', text: 'Excluir', onclick: del })));
     recalc(); if (dlg.showModal) { if (!dlg.open) dlg.showModal(); } else dlg.setAttribute('open', '');
   }
