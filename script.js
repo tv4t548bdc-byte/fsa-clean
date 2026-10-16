@@ -123,10 +123,43 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
   const fotosInput = $('qfFiles'), grid = $('qfPreviews');
   const MAX_FILES = 20, MAX_MB = 25, MAX_TOTAL_MB = 100;
   const state = { pets: null, manchas: null };
-  let files = [], busy = false;
+  let files = [], busy = false, pendingId = null;
 
   const chips = (id) => [...document.querySelectorAll('#' + id + ' .q-chip')];
   const fail = (m) => { err.textContent = m; err.hidden = false; err.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
+
+  /* ---- agenda: o cliente escolhe um dia e horário publicados pela equipe ---- */
+  const AGENDA = { ativo: true, obrigatorio: false, diasVisiveis: 30 };
+  const agBox = $('qfAgenda'), diasBox = $('qfDias'), horasBox = $('qfHoras'), agNota = $('qfAgNota');
+  const DIASN = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'], hhm = (t) => String(t).slice(0, 5);
+  const lbDia = (s2) => { const [y, mo, d0] = s2.split('-').map(Number); return DIASN[new Date(y, mo - 1, d0).getDay()] + ' ' + String(d0).padStart(2, '0') + '/' + String(mo).padStart(2, '0'); };
+  const lbHor = (x) => lbDia(x.data) + ', ' + hhm(x.inicio) + ' às ' + hhm(x.fim);
+  let slots = [], diaSel = ''; state.horario = null;
+  const renderAg = () => {
+    diasBox.textContent = ''; horasBox.textContent = '';
+    [...new Set(slots.map((x) => x.data))].forEach((dd) => {
+      const c = mk('button', 'q-chip', lbDia(dd)); c.type = 'button'; c.setAttribute('aria-pressed', String(dd === diaSel));
+      c.addEventListener('click', () => { diaSel = dd; if (state.horario && state.horario.data !== dd) state.horario = null; renderAg(); err.hidden = true; }); diasBox.append(c);
+    });
+    const nb = mk('button', 'q-chip', 'Sem preferência'); nb.type = 'button'; nb.setAttribute('aria-pressed', String(!state.horario && !diaSel));
+    nb.addEventListener('click', () => { diaSel = ''; state.horario = null; renderAg(); }); diasBox.append(nb);
+    slots.filter((x) => x.data === diaSel).forEach((x) => {
+      const c = mk('button', 'q-chip', hhm(x.inicio) + ' às ' + hhm(x.fim)); c.type = 'button'; c.setAttribute('aria-pressed', String(!!state.horario && state.horario.id === x.id));
+      c.addEventListener('click', () => { state.horario = x; renderAg(); err.hidden = true; }); horasBox.append(c);
+    });
+    agNota.textContent = state.horario ? 'Horário escolhido: ' + lbHor(state.horario) + '. A equipe confirma com você.' : (slots.length ? 'Escolha um dia e depois o horário, ou deixe "Sem preferência" e combinamos pelo WhatsApp.' : '');
+  };
+  const loadSlots = async () => {
+    const d0 = window.fsaDb && window.fsaDb(); if (!d0 || !AGENDA.ativo) return;
+    try { const r = await d0.rpc('horarios_disponiveis', { p_dias: AGENDA.diasVisiveis }); if (r.error) throw r.error; slots = r.data || []; }
+    catch (_) { agBox.hidden = true; return; }                       /* sem agenda disponível: o formulário segue normal */
+    if (state.horario && !slots.some((x) => x.id === state.horario.id)) state.horario = null;
+    if (diaSel && !slots.some((x) => x.data === diaSel)) diaSel = '';
+    agBox.hidden = false;
+    if (!slots.length) { diasBox.textContent = ''; horasBox.textContent = ''; agNota.textContent = 'No momento não há horários publicados. Envie o pedido e nossa equipe combina o melhor horário com você pelo WhatsApp.'; return; }
+    renderAg();
+  };
+  loadSlots();
 
   /* ---- vários itens no mesmo pedido (pacote) ---- */
   const TIPOS = ['Sofá', 'Colchão', 'Cadeiras', 'Poltronas', 'Automotivo', 'Outro'];
@@ -239,7 +272,7 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
         body: JSON.stringify({
           _subject: 'Novo orçamento recebido - FSA Clean', _template: 'table', _captcha: 'false',
           'Aviso': 'Novo orçamento recebido pelo site. Abra o painel para ver as fotos e responder.',
-          'Cliente': d.nome, 'Bairro': d.bairro, 'Estofado': d.tipo, 'Tecido': d.tecido,
+          'Cliente': d.nome, 'Bairro': d.bairro, 'Estofado': d.tipo, 'Tecido': d.tecido, 'Horário solicitado': d.horario,
           'Possui pets': d.pets ? 'Sim' : 'Não', 'Possui manchas': d.manchas ? 'Sim' : 'Não',
           'Arquivos anexados': String(d.n), 'Painel': location.origin + '/admin'
         })
@@ -272,12 +305,18 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
     if (!limpeza) return fail('Informe há quanto tempo o estofado não é limpo.');
     if (state.pets === null) return fail('Informe se possui pets.');
     if (state.manchas === null) return fail('Informe se possui manchas.');
+    if (AGENDA.obrigatorio && slots.length && !state.horario) return fail('Escolha um dia e horário para o atendimento.');
     const db = window.fsaDb && window.fsaDb();
     if (!db) return fail('Não foi possível enviar agora. Tente novamente em instantes.');
     if (tel.length <= 11) tel = '55' + tel;
     busy = true; btn.disabled = true; err.hidden = true; btnLabel.textContent = 'Enviando...';
     try {
-      const id = uuid(), paths = new Array(files.length); let next = 0, doneN = 0;
+      const id = pendingId || (pendingId = uuid()), paths = new Array(files.length);   /* mesmo id se precisar tentar de novo */
+      if (state.horario) {                                           /* reserva o horário ANTES de enviar: dois clientes nunca pegam o mesmo */
+        btnLabel.textContent = 'Reservando horário...';
+        const rv = await db.rpc('reservar_horario', { p_horario: state.horario.id, p_orcamento: id });
+        if (rv.error || rv.data !== true) { await loadSlots(); throw Object.assign(new Error('slot'), { slot: true }); }
+      } let next = 0, doneN = 0;
       const worker = async () => {
         while (next < files.length) {
           const i = next++;
@@ -303,13 +342,15 @@ const LABELS = ['', 'Poderia ser melhor', 'Regular', 'Bom', 'Muito bom', 'Excele
       const resumoTam = um ? (i0.tipo === 'Colchão' ? i0.tamanho : (i0.tipo === 'Sofá' ? i0.qty + ' lugares' : null)) : null;
       const ins = await db.from('orcamentos').insert({
         id, nome, whatsapp: tel, bairro, tipo_estofado: resumoTipo, quantidade: resumoQtd, tamanho: resumoTam, itens: itensPayload,
-        tipo_tecido: tecido, ultima_limpeza: limpeza, tem_pets: !!state.pets, tem_manchas: !!state.manchas,
+        horario_id: state.horario ? state.horario.id : null, tipo_tecido: tecido, ultima_limpeza: limpeza, tem_pets: !!state.pets, tem_manchas: !!state.manchas,
         detalhes: form.detalhes.value.trim() || null, fotos: paths
       });
       if (ins.error) throw ins.error;
-      notifyEmail({ nome, bairro, tipo: itens.map(itemText).join(' + '), tecido, n: paths.length, pets: !!state.pets, manchas: !!state.manchas });
-      form.hidden = true; done.hidden = false; done.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    } catch (_) {
+      notifyEmail({ nome, bairro, tipo: itens.map(itemText).join(' + '), tecido, horario: state.horario ? lbHor(state.horario) : 'Sem preferência', n: paths.length, pets: !!state.pets, manchas: !!state.manchas });
+      if (state.horario) { const p0 = document.createElement('p'); p0.className = 'qf-hor'; p0.textContent = 'Horário solicitado: ' + lbHor(state.horario) + '. Nossa equipe confirma com você.'; done.append(p0); }
+      pendingId = null; form.hidden = true; done.hidden = false; done.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    } catch (ex) {
+      if (ex && ex.slot) { fail('Esse horário acabou de ser reservado por outra pessoa. Escolha outro e envie de novo.'); return; }
       fail('Não foi possível enviar agora. Confira sua conexão e tente novamente.');
     } finally { busy = false; btn.disabled = false; btnLabel.textContent = 'Enviar solicitação'; }
   });

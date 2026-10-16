@@ -26,6 +26,20 @@
   const fmtDT = (d) => new Date(d).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
   const norm = (s) => String(s || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
   const today = () => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); };
+  /* ---------- datas e horários (agenda) ---------- */
+  const DIAS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'], DIAS_LONGO = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado'];
+  const pd = (s) => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+  const ds = (d) => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  const addDays = (s, n) => { const d = pd(s); d.setDate(d.getDate() + n); return ds(d); };
+  const mondayOf = (s) => { const d = pd(s); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return ds(d); };
+  const hh = (t) => String(t).slice(0, 5);
+  const toMin = (t) => { const [h, m] = hh(t).split(':').map(Number); return h * 60 + m; };
+  const fromMin = (t) => String(Math.floor(t / 60)).padStart(2, '0') + ':' + String(t % 60).padStart(2, '0') + ':00';
+  const fmtDia = (s) => { const d = pd(s); return DIAS[d.getDay()] + ' ' + String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0'); };
+  const diaLongo = (s) => { const d = pd(s); return DIAS_LONGO[d.getDay()] + ', ' + String(d.getDate()).padStart(2, '0') + '/' + String(d.getMonth() + 1).padStart(2, '0'); };
+  const slotTxt = (h) => fmtDia(h.data) + ' · ' + hh(h.inicio) + '–' + hh(h.fim);
+  const nowMin = () => { const n = new Date(); return n.getHours() * 60 + n.getMinutes(); };
+  const futuro = (data, ini) => data > today() || (data === today() && toMin(ini) > nowMin());
   const STATUS = { novo: 'Novo', em_analise: 'Em análise', orcado: 'Orçado', aprovado: 'Aprovado', concluido: 'Concluído', recusado: 'Recusado', pendente: 'Pendente', aprovada: 'Aprovada', rejeitada: 'Rejeitada' };
   const msg = (n, t, ok) => { n.textContent = t || ''; n.hidden = !t; n.className = ok ? 'okmsg' : 'err'; };
   const fetchAll = async (mk) => { /* pagina de 1000 em 1000 */
@@ -38,7 +52,7 @@
   const enter = async (session) => {
     const { data, error } = await db.rpc('is_admin');
     if (error || data !== true) { await db.auth.signOut(); return showLogin('Este usuário não tem permissão de acesso ao painel.'); }
-    $('who').textContent = session.user.email + ' · v6'; $('login').hidden = true; $('app').hidden = false;
+    $('who').textContent = session.user.email + ' · v8'; $('login').hidden = true; $('app').hidden = false;
     await loadPrices(); await ensurePrices(); loadLogo().catch(() => null); loadOrc(); refreshBadges();
   };
   const boot = async () => {
@@ -62,14 +76,16 @@
   /* ---------- abas ---------- */
   document.querySelectorAll('nav.tabs button').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('nav.tabs button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
-    ['orc', 'cx', 'av', 'pr'].forEach((t) => { $('tab-' + t).hidden = t !== b.dataset.tab; });
-    ({ orc: loadOrc, cx: loadCaixa, av: loadAval, pr: renderPrices })[b.dataset.tab]();
+    ['orc', 'ag', 'cx', 'av', 'pr'].forEach((t) => { $('tab-' + t).hidden = t !== b.dataset.tab; });
+    ({ orc: loadOrc, ag: loadAgenda, cx: loadCaixa, av: loadAval, pr: renderPrices })[b.dataset.tab]();
   }));
   const refreshBadges = async () => {
     const a = await db.from('orcamentos').select('id', { count: 'exact', head: true }).eq('status', 'novo');
     const c = await db.from('avaliacoes').select('id', { count: 'exact', head: true }).eq('status', 'pendente');
     $('newCount').textContent = a.count || 0; $('newCount').hidden = !a.count;
     $('pendCount').textContent = c.count || 0; $('pendCount').hidden = !c.count;
+    const g = await db.from('horarios').select('id', { count: 'exact', head: true }).eq('status', 'reservado').gte('data', today());
+    $('agCount').textContent = g.count || 0; $('agCount').hidden = !g.count;
   };
 
   /* ---------- preços ---------- */
@@ -124,10 +140,12 @@
     const { data, error } = await q; const box = $('orcList'); box.textContent = '';
     if (error) return box.append(el('p', { class: 'err', text: 'Não foi possível carregar os orçamentos.' }));
     orcCache = data;
+    const hids = data.map((o) => o.horario_id).filter(Boolean), hmap = {};
+    if (hids.length) { const r = await db.from('horarios').select('*').in('id', hids); (r.data || []).forEach((h) => { hmap[h.id] = h; }); }
     if (!data.length) box.append(el('p', { class: 'muted', text: 'Nenhuma solicitação por aqui ainda.' }));
     data.forEach((o) => box.append(el('div', { class: 'card item', onclick: () => openOrc(o.id) },
       el('div', {}, el('b', { text: o.nome }),
-        el('span', { class: 'meta', text: [orcResumo(o), o.bairro, fmtDT(o.created_at), (o.fotos || []).length + ' arquivo(s)'].join(' · ') })),
+        el('span', { class: 'meta', text: [orcResumo(o), o.bairro, fmtDT(o.created_at), (o.fotos || []).length + ' arquivo(s)', hmap[o.horario_id] ? '\u{1F4C5} ' + slotTxt(hmap[o.horario_id]) : ''].filter(Boolean).join(' · ') })),
       el('div', { style: 'text-align:right' }, el('span', { class: 'st ' + o.status, text: STATUS[o.status] }), o.total != null ? el('div', { class: 'small', text: brl(o.total), style: 'font-weight:700;margin-top:4px' }) : null))));
     refreshBadges();
   };
@@ -169,6 +187,8 @@
     const fresh = o.preco_base === null;               /* ainda não calculado => sugere */
     const sg = suggest(o);
     const itens = itensOf(o);
+    const hor = o.horario_id ? (await db.from('horarios').select('*').eq('id', o.horario_id).single()).data : null;
+    const livres = ((await db.from('horarios').select('*').eq('status', 'livre').gte('data', today()).order('data').limit(80)).data || []).filter((h) => futuro(h.data, h.inicio)).sort((a, b) => (a.data + hh(a.inicio) < b.data + hh(b.inicio) ? -1 : 1));
     const itemIn = itens.map((it) => el('input', { inputmode: 'decimal', value: numIn(fresh || it.valor === undefined ? suggestItem(it) : it.valor), 'aria-label': 'Valor: ' + itemLabel(it) }));
     itemIn.forEach((i) => i.addEventListener('input', () => recalc()));
     const v = { preco_base: fresh ? sg.preco_base : o.preco_base, taxa_bairro: fresh ? sg.taxa_bairro : o.taxa_bairro, adicional_tecido: fresh ? sg.adicional_tecido : o.adicional_tecido, adicional_pet: fresh ? sg.adicional_pet : o.adicional_pet, adicional_manchas: fresh ? sg.adicional_manchas : (o.adicional_manchas || 0), outros: o.outros, desconto: o.desconto };
@@ -184,6 +204,21 @@
       if (!r || !r.signedUrl) return; const p = o.fotos[i] || '';
       photos.append(el('a', { href: r.signedUrl, target: '_blank', rel: 'noopener' }, isVideo(p) ? el('video', { src: r.signedUrl + '#t=0.1', muted: true, playsinline: true, preload: 'metadata' }) : el('img', { src: r.signedUrl, alt: 'Foto do cliente', loading: 'lazy' })));
     }));
+    const full0 = (o.whatsapp || '').replace(/\D/g, ''), fullTel = full0.length <= 11 ? '55' + full0 : full0;
+    const slotBox = el('div', { class: 'card', style: 'display:grid;gap:10px' }, el('h3', { text: 'Horário do atendimento', style: 'font-size:1.05rem' }));
+    if (hor) {
+      slotBox.append(el('div', { style: 'display:flex;justify-content:space-between;gap:8px;align-items:center' }, el('b', { text: slotTxt(hor) }), el('span', { class: 'st ' + (hor.status === 'confirmado' ? 'aprovado' : 'pendente'), text: hor.status === 'confirmado' ? 'Confirmado' : 'Aguardando confirmação' })));
+      const act = el('div', { class: 'actions' });
+      if (hor.status !== 'confirmado') act.append(el('button', { class: 'btn ok', type: 'button', text: 'Confirmar horário', onclick: async () => { const r = await db.rpc('admin_atribuir_horario', { p_orcamento: o.id, p_horario: hor.id }); if (r.error || r.data !== true) return alert('Não foi possível confirmar. Atualize a página e tente de novo.'); openOrc(o.id); } }));
+      else act.append(el('a', { class: 'btn ok', target: '_blank', rel: 'noopener', text: 'Avisar cliente no WhatsApp',
+        href: 'https://wa.me/' + fullTel + '?text=' + encodeURIComponent('Olá, ' + o.nome + '! Tudo bem?\nAqui é da FSA Clean! \u{1F9FC}\nSeu atendimento está confirmado para ' + diaLongo(hor.data) + ', das ' + hh(hor.inicio) + ' às ' + hh(hor.fim) + '.\nQualquer imprevisto, é só nos avisar por aqui. Até lá!') }));
+      act.append(el('button', { class: 'btn bad', type: 'button', text: 'Liberar horário', onclick: async () => { if (!confirm('Liberar este horário? Ele volta para a lista de disponíveis.')) return; await db.rpc('admin_liberar_horario', { p_orcamento: o.id }); openOrc(o.id); } }));
+      slotBox.append(act);
+    } else slotBox.append(el('p', { class: 'hint', text: 'O cliente não escolheu um horário.' }));
+    if (livres.length) {
+      const sel = el('select', { style: 'flex:2;min-width:180px' }, el('option', { value: '', text: hor ? 'Trocar por outro horário...' : 'Definir um horário...' }), ...livres.map((h) => el('option', { value: h.id, text: slotTxt(h) })));
+      slotBox.append(el('div', { class: 'actions' }, sel, el('button', { class: 'btn', type: 'button', text: 'Definir e confirmar', onclick: async () => { if (!sel.value) return; const r = await db.rpc('admin_atribuir_horario', { p_orcamento: o.id, p_horario: sel.value }); if (r.error || r.data !== true) return alert('Esse horário não está mais livre. Escolha outro.'); openOrc(o.id); } })));
+    } else if (!hor) slotBox.append(el('p', { class: 'hint', text: 'Publique horários na aba Agenda para poder definir um.' }));
     const out = el('div', { class: 'actions' }); const note = el('p', { class: 'hint' });
     const waLink = el('a', { class: 'btn ok', target: '_blank', rel: 'noopener', hidden: true, text: 'Abrir conversa no WhatsApp' });
     const pdfLinks = el('div', { class: 'actions', hidden: true });
@@ -201,7 +236,7 @@
       msg(note, '');
       if (status.value === 'novo' || status.value === 'em_analise') status.value = 'orcado';
       const vals = values(); let blob;
-      try { blob = buildPdf({ ...o, ...vals }).output('blob'); } catch (e) { return msg(note, 'Não foi possível gerar o PDF. Atualize a página e tente de novo.'); }
+      try { blob = buildPdf({ ...o, ...vals, horarioTexto: hor ? diaLongo(hor.data) + ', ' + hh(hor.inicio) + ' às ' + hh(hor.fim) : '' }).output('blob'); } catch (e) { return msg(note, 'Não foi possível gerar o PDF. Atualize a página e tente de novo.'); }
       const local = URL.createObjectURL(blob);
       const file = 'orcamento-fsa-clean-' + norm(o.nome).replace(/[^a-z0-9]+/g, '-').slice(0, 24) + '.pdf';
       const a = el('a', { href: local, download: file }); document.body.append(a); a.click(); a.remove();          /* (a) baixa o PDF */
@@ -248,6 +283,7 @@
         el('div', {}, el('span', { text: 'Possui manchas?' }), o.tem_manchas ? 'Sim' : 'Não'),
         (o.pets_manchas && !o.tem_pets && !o.tem_manchas) ? el('div', {}, el('span', { text: 'Pets/manchas (cadastro antigo)' }), 'Sim') : document.createComment('-'),
         el('div', {}, el('span', { text: 'Observações do cliente' }), o.detalhes || '—')),
+      slotBox,
       (o.fotos || []).length ? photos : el('p', { class: 'hint', text: 'O cliente não enviou fotos ou vídeos.' }),
       el('h3', { text: 'Valores', style: 'font-size:1.05rem' }), missing,
       el('div', { class: 'span-all' }, el('span', { class: 'hint', text: itens.length > 1 ? 'Valor de cada item do pacote (a soma vira o preço base):' : 'Valor do serviço:', style: 'display:block;margin-bottom:6px' }), ...itens.map((it, i) => el('label', { style: 'margin-bottom:8px' }, itemLabel(it), itemIn[i]))),
@@ -303,14 +339,14 @@
 
     header(); footer(); y = 50;
     /* --- cliente / atendimento --- */
-    const boxW = (CW - 6) / 2, boxH = 40;
+    const boxW = (CW - 6) / 2, boxH = o.horarioTexto ? 49 : 40;
     const box = (x, ttl, items) => {
       fill(PALE); stroke(LINE); d.setLineWidth(0.3); d.roundedRect(x, y, boxW, boxH, 2.5, 2.5, 'FD');
       font('bold', 9, BLUE); T(ttl, x + 4, y + 6.5);
       items.forEach(([k, v], i) => { const yy = y + 13 + i * 9; font('normal', 7.5, GRAY); T(k.toUpperCase(), x + 4, yy); font('bold', 9.5, INK); T(wrap(v, boxW - 8)[0], x + 4, yy + 4.6); });
     };
     box(M, 'CLIENTE', [['Nome', o.nome], ['Telefone', fmtPhone(o.whatsapp)], ['Endereço', o.bairro + ' / Feira de Santana - BA']]);
-    box(M + boxW + 6, 'INFORMAÇÕES DO ATENDIMENTO', [['Validade da proposta', '7 dias'], ['Modalidade', 'Atendimento Domiciliar (Em trânsito)'], ['Técnico responsável', 'Equipe FSA Clean']]);
+    box(M + boxW + 6, 'INFORMAÇÕES DO ATENDIMENTO', [['Validade da proposta', '7 dias'], ['Modalidade', 'Atendimento Domiciliar (Em trânsito)'], ['Técnico responsável', 'Equipe FSA Clean'], ...(o.horarioTexto ? [['Data e horário', o.horarioTexto]] : [])]);
     y += boxH + 9;
 
     /* --- 1. serviços --- */
@@ -385,6 +421,68 @@
     font('bold', 15, WHITE); T('(75) 98151-6165', M + 7, y + 33); T('(75) 99255-0004', M + CW / 2 + 7, y + 33);
     return d;
   }
+
+  /* ---------- agenda (dias e horários disponíveis) ---------- */
+  let agStart = mondayOf(today());
+  const SLOT_ST = { livre: 'Livre', reservado: 'Aguardando confirmação', confirmado: 'Confirmado' };
+  const WD = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'];
+  WD.forEach((n, i) => $('agDias').append(el('button', { type: 'button', class: 'chip', 'aria-pressed': 'false', text: n, onclick: (e) => { const b = e.currentTarget; b.setAttribute('aria-pressed', String(b.getAttribute('aria-pressed') !== 'true')); } })));
+  async function loadAgenda() {
+    const end = addDays(agStart, 6); $('agTitulo').textContent = fmtDia(agStart) + ' a ' + fmtDia(end);
+    const { data, error } = await db.from('horarios').select('*').gte('data', agStart).lte('data', end).order('data');
+    const box = $('agDays'); box.textContent = '';
+    if (error) return box.append(el('p', { class: 'err', text: 'Não foi possível carregar a agenda. Confira se o SQL "supabase-atualizacao-4" foi executado.' }));
+    const ids = data.map((h) => h.orcamento_id).filter(Boolean), nomes = {};
+    if (ids.length) { const r = await db.from('orcamentos').select('id,nome,bairro').in('id', ids); (r.data || []).forEach((o) => { nomes[o.id] = o; }); }
+    for (let i = 0; i < 7; i++) {
+      const day = addDays(agStart, i), slots = data.filter((h) => h.data === day).sort((a, b) => (hh(a.inicio) < hh(b.inicio) ? -1 : 1));
+      const card = el('div', { class: 'card day' }, el('div', { class: 'dayhead' }, el('b', { text: diaLongo(day) }),
+        slots.some((s) => s.status === 'livre') ? el('button', { class: 'btn bad small', type: 'button', text: 'Limpar livres', onclick: async () => { if (!confirm('Excluir os horários livres de ' + fmtDia(day) + '?')) return; await db.from('horarios').delete().eq('data', day).eq('status', 'livre'); loadAgenda(); } }) : null));
+      if (!slots.length) card.append(el('p', { class: 'hint', text: 'Sem horários publicados.' }));
+      slots.forEach((h) => {
+        const o = nomes[h.orcamento_id], semPedido = h.status === 'reservado' && !o;
+        card.append(el('div', { class: 'row' }, el('div', {}, el('b', { text: hh(h.inicio) + ' – ' + hh(h.fim) }), o ? el('div', { class: 'hint', text: o.nome + ' · ' + o.bairro }) : null),
+          el('div', { style: 'display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end' },
+            el('span', { class: 'st ' + (h.status === 'livre' || semPedido ? 'novo' : h.status === 'reservado' ? 'pendente' : 'aprovado'), text: semPedido ? 'Reserva sem pedido' : SLOT_ST[h.status] }),
+            o ? el('button', { class: 'btn ghost small', type: 'button', text: 'Abrir pedido', onclick: () => openOrc(h.orcamento_id) }) : null,
+            (h.status === 'livre' || semPedido) ? el('button', { class: 'btn bad small', type: 'button', 'aria-label': 'Excluir horário', text: '\u00d7', onclick: async () => { await db.from('horarios').delete().eq('id', h.id); loadAgenda(); } }) : null)));
+      });
+      box.append(card);
+    }
+    refreshBadges();
+  }
+  const agSave = async (rows, okTxt) => {
+    const e = $('agErr'); msg(e, '');
+    if (!rows.length) return msg(e, 'Nenhum horário novo para publicar (os que já passaram não entram).');
+    const { error } = await db.from('horarios').upsert(rows, { onConflict: 'data,inicio', ignoreDuplicates: true });
+    if (error) return msg(e, 'Não foi possível publicar. Confira se o SQL "supabase-atualizacao-4" foi executado.');
+    msg(e, rows.length + ' ' + okTxt, true); loadAgenda();
+  };
+  $('agPrev').addEventListener('click', () => { agStart = addDays(agStart, -7); loadAgenda(); });
+  $('agNext').addEventListener('click', () => { agStart = addDays(agStart, 7); loadAgenda(); });
+  $('formAg').addEventListener('submit', (ev) => {
+    ev.preventDefault(); const f = ev.target, e = $('agErr'); msg(e, '');
+    const dias = [...document.querySelectorAll('#agDias .chip')].map((b, i) => (b.getAttribute('aria-pressed') === 'true' ? i : -1)).filter((i) => i >= 0);
+    if (!dias.length) return msg(e, 'Marque pelo menos um dia da semana.');
+    if (!f.ini.value || !f.fim.value) return msg(e, 'Informe o horário inicial e o final.');
+    const ini = toMin(f.ini.value), fim = toMin(f.fim.value), dur = Number(f.dur.value);
+    if (fim - ini < dur) return msg(e, 'O período é menor que a duração de cada horário.');
+    const rows = []; dias.forEach((i) => { const day = addDays(agStart, i); for (let t = ini; t + dur <= fim; t += dur) if (futuro(day, fromMin(t))) rows.push({ data: day, inicio: fromMin(t), fim: fromMin(t + dur) }); });
+    agSave(rows, 'horário(s) publicado(s). Os que já existiam foram mantidos.');
+  });
+  $('formAg1').addEventListener('submit', (ev) => {
+    ev.preventDefault(); const f = ev.target, e = $('agErr'); msg(e, '');
+    if (!f.data.value || !f.ini.value || !f.fim.value) return msg(e, 'Informe data, início e fim.');
+    if (toMin(f.fim.value) <= toMin(f.ini.value)) return msg(e, 'O fim precisa ser depois do início.');
+    if (!futuro(f.data.value, f.ini.value)) return msg(e, 'Esse horário já passou.');
+    agSave([{ data: f.data.value, inicio: hh(f.ini.value) + ':00', fim: hh(f.fim.value) + ':00' }], 'horário publicado.'); f.reset();
+  });
+  $('agCopy').addEventListener('click', async () => {
+    const e = $('agErr'), prev = addDays(agStart, -7); msg(e, '');
+    const { data, error } = await db.from('horarios').select('data,inicio,fim').gte('data', prev).lte('data', addDays(prev, 6));
+    if (error || !data.length) return msg(e, 'A semana anterior não tem horários para repetir.');
+    agSave(data.map((h) => ({ data: addDays(h.data, 7), inicio: h.inicio, fim: h.fim })).filter((r) => futuro(r.data, r.inicio)), 'horário(s) copiado(s) da semana anterior.');
+  });
 
   /* ---------- caixa ---------- */
   const monthRange = () => { const [y, m] = ($('cxMonth').value || today().slice(0, 7)).split('-').map(Number); const a = y + '-' + String(m).padStart(2, '0') + '-01'; const nx = m === 12 ? (y + 1) + '-01-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01'; return [a, nx]; };

@@ -52,6 +52,7 @@
     .kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:.88rem}.kv span{color:var(--muted);display:block;font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
     .photos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.photos a{display:block;aspect-ratio:1;border-radius:12px;overflow:hidden;background:#dfeef3}.photos img,.photos video{width:100%;height:100%;object-fit:cover;display:block}
     .calc{display:grid;grid-template-columns:1fr 1fr;gap:10px}.total{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:var(--pale);border-radius:12px;font-weight:800;color:var(--blue-deep)}.total b{font-size:1.3rem;font-family:Manrope,sans-serif}
+    .chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1.5px solid var(--line);background:#fff;border-radius:99px;padding:9px 15px;font-weight:700;cursor:pointer;color:var(--blue-deep)}.chip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:#fff}.day{margin-bottom:10px}.dayhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
     .actions{display:flex;flex-wrap:wrap;gap:8px}.actions .btn{flex:1;min-width:130px}
     a.btn{text-decoration:none;text-align:center;display:inline-block}
     .btn.star{background:#fff8e1;color:#8a5a00;border:1.5px solid #f3d27a}.btn.star:hover{background:#fff1c2;filter:none}
@@ -85,6 +86,7 @@
     </header>
     <nav class="tabs" role="tablist" aria-label="Seções do painel">
       <button role="tab" aria-selected="true" data-tab="orc">Orçamentos <span class="badge" id="newCount" hidden>0</span></button>
+      <button role="tab" aria-selected="false" data-tab="ag">Agenda <span class="badge" id="agCount" hidden>0</span></button>
       <button role="tab" aria-selected="false" data-tab="cx">Caixa</button>
       <button role="tab" aria-selected="false" data-tab="av">Avaliações <span class="badge" id="pendCount" hidden>0</span></button>
       <button role="tab" aria-selected="false" data-tab="pr">Preços</button>
@@ -94,6 +96,23 @@
       <section id="tab-orc">
         <div class="bar"><label>Filtrar por status<select id="fStatus"><option value="">Todos</option><option value="novo">Novos</option><option value="em_analise">Em análise</option><option value="orcado">Orçados</option><option value="aprovado">Aprovados</option><option value="concluido">Concluídos</option><option value="recusado">Recusados</option></select></label><button class="btn ghost" id="reloadOrc" type="button">Atualizar</button></div>
         <div class="list" id="orcList"></div>
+      </section>
+      <!-- AGENDA -->
+      <section id="tab-ag" hidden>
+        <div class="bar"><button class="btn ghost" id="agPrev" type="button">&larr; Anterior</button><b id="agTitulo" style="flex:2;text-align:center;align-self:center;min-width:150px"></b><button class="btn ghost" id="agNext" type="button">Próxima &rarr;</button></div>
+        <div class="card" style="margin-bottom:14px"><h3>Publicar horários nesta semana</h3>
+          <p class="hint" style="margin:6px 0 12px">Marque os dias em que vocês podem atender, o período e a duração de cada horário. Os clientes escolhem entre estes horários no site.</p>
+          <form id="formAg" novalidate>
+            <div class="chips" id="agDias" style="margin-bottom:12px"></div>
+            <div class="form-grid"><label>Das<input type="time" name="ini" value="18:00"></label><label>Até<input type="time" name="fim" value="21:00"></label>
+              <label class="span2">Duração de cada horário<select name="dur"><option value="30">30 minutos</option><option value="45">45 minutos</option><option value="60" selected>1 hora</option><option value="90">1 hora e 30</option><option value="120">2 horas</option><option value="180">3 horas</option><option value="240">4 horas</option></select></label></div>
+            <div class="actions"><button class="btn ok" type="submit">Publicar horários</button><button class="btn ghost" id="agCopy" type="button">Repetir a semana anterior</button></div>
+          </form>
+          <details style="margin-top:12px"><summary class="hint" style="cursor:pointer">Adicionar um horário avulso</summary>
+            <form id="formAg1" class="form-grid" style="margin-top:10px" novalidate><label>Data<input type="date" name="data"></label><label>Das<input type="time" name="ini"></label><label>Até<input type="time" name="fim"></label><button class="btn ghost" style="align-self:end" type="submit">Adicionar</button></form></details>
+          <p class="err" id="agErr" hidden style="margin-top:10px"></p>
+        </div>
+        <div id="agDays"></div>
       </section>
       <!-- CAIXA -->
       <section id="tab-cx" hidden>
