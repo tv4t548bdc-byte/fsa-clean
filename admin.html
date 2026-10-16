@@ -52,6 +52,7 @@
     .kv{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:.88rem}.kv span{color:var(--muted);display:block;font-size:.74rem;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
     .photos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.photos a{display:block;aspect-ratio:1;border-radius:12px;overflow:hidden;background:#dfeef3}.photos img,.photos video{width:100%;height:100%;object-fit:cover;display:block}
     .calc{display:grid;grid-template-columns:1fr 1fr;gap:10px}.total{display:flex;justify-content:space-between;align-items:center;padding:12px 14px;background:var(--pale);border-radius:12px;font-weight:800;color:var(--blue-deep)}.total b{font-size:1.3rem;font-family:Manrope,sans-serif}
+    .item.cl-quase{border-color:#f3d27a;background:#fffaf0}.item.cl-meta{border-color:#9ad9b8;background:#f1fbf5}.stamps{display:flex;gap:8px;flex-wrap:wrap}.stamp{width:34px;height:34px;border-radius:50%;border:2px dashed #cfdde5;display:grid;place-items:center;font-weight:800;color:var(--muted)}.stamp.on{background:var(--turq);border:2px solid var(--turq);color:#fff}.sect{display:grid;gap:10px;border-top:1px solid var(--line);padding-top:14px}.sect h3{font-size:1.05rem}
     .chips{display:flex;flex-wrap:wrap;gap:8px}.chip{border:1.5px solid var(--line);background:#fff;border-radius:99px;padding:9px 15px;font-weight:700;cursor:pointer;color:var(--blue-deep)}.chip[aria-pressed=true]{background:var(--blue);border-color:var(--blue);color:#fff}.day{margin-bottom:10px}.dayhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
     .actions{display:flex;flex-wrap:wrap;gap:8px}.actions .btn{flex:1;min-width:130px}
     a.btn{text-decoration:none;text-align:center;display:inline-block}
@@ -87,6 +88,7 @@
     <nav class="tabs" role="tablist" aria-label="Seções do painel">
       <button role="tab" aria-selected="true" data-tab="orc">Orçamentos <span class="badge" id="newCount" hidden>0</span></button>
       <button role="tab" aria-selected="false" data-tab="ag">Agenda <span class="badge" id="agCount" hidden>0</span></button>
+      <button role="tab" aria-selected="false" data-tab="cl">Clientes <span class="badge" id="clCount" hidden>0</span></button>
       <button role="tab" aria-selected="false" data-tab="cx">Caixa</button>
       <button role="tab" aria-selected="false" data-tab="av">Avaliações <span class="badge" id="pendCount" hidden>0</span></button>
       <button role="tab" aria-selected="false" data-tab="pr">Preços</button>
@@ -113,6 +115,15 @@
           <p class="err" id="agErr" hidden style="margin-top:10px"></p>
         </div>
         <div id="agDays"></div>
+      </section>
+      <!-- CLIENTES (CRM) -->
+      <section id="tab-cl" hidden>
+        <div class="cards" id="clCards"></div>
+        <div class="bar"><label>Buscar<input id="clBusca" placeholder="Nome, WhatsApp ou bairro"></label>
+          <label>Filtrar<select id="clFiltro"><option value="">Todos os clientes</option><option value="novo">Novos (nenhum serviço)</option><option value="ativo">Ativos</option><option value="pendente">Pendentes de retorno (passou do ciclo)</option><option value="devido">Lembrete para enviar</option><option value="quase">Falta 1 serviço para a meta</option><option value="meta">Meta atingida (Super Oferta)</option></select></label></div>
+        <details class="card" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:700;color:var(--blue-deep)">+ Cadastrar cliente</summary>
+          <form id="formCl" class="form-grid" style="margin-top:10px" novalidate><label>Nome<input name="nome" maxlength="80"></label><label>WhatsApp<input name="whatsapp" inputmode="tel" placeholder="(75) 99999-9999"></label><button class="btn ok span2" type="submit">Cadastrar e abrir ficha</button></form><p class="err" id="clErr" hidden></p></details>
+        <div class="list" id="clList"></div>
       </section>
       <!-- CAIXA -->
       <section id="tab-cx" hidden>

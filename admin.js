@@ -52,8 +52,8 @@
   const enter = async (session) => {
     const { data, error } = await db.rpc('is_admin');
     if (error || data !== true) { await db.auth.signOut(); return showLogin('Este usuário não tem permissão de acesso ao painel.'); }
-    $('who').textContent = session.user.email + ' · v8'; $('login').hidden = true; $('app').hidden = false;
-    await loadPrices(); await ensurePrices(); loadLogo().catch(() => null); loadOrc(); refreshBadges();
+    $('who').textContent = session.user.email + ' · v9'; $('login').hidden = true; $('app').hidden = false;
+    await loadPrices(); await ensurePrices(); loadLogo().catch(() => null); loadOrc(); refreshBadges(); crmLoad().catch(() => null);
   };
   const boot = async () => {
     db = window.fsaDb && window.fsaDb();
@@ -76,8 +76,8 @@
   /* ---------- abas ---------- */
   document.querySelectorAll('nav.tabs button').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('nav.tabs button').forEach((x) => x.setAttribute('aria-selected', String(x === b)));
-    ['orc', 'ag', 'cx', 'av', 'pr'].forEach((t) => { $('tab-' + t).hidden = t !== b.dataset.tab; });
-    ({ orc: loadOrc, ag: loadAgenda, cx: loadCaixa, av: loadAval, pr: renderPrices })[b.dataset.tab]();
+    ['orc', 'ag', 'cl', 'cx', 'av', 'pr'].forEach((t) => { $('tab-' + t).hidden = t !== b.dataset.tab; });
+    ({ orc: loadOrc, ag: loadAgenda, cl: loadClientes, cx: loadCaixa, av: loadAval, pr: renderPrices })[b.dataset.tab]();
   }));
   const refreshBadges = async () => {
     const a = await db.from('orcamentos').select('id', { count: 'exact', head: true }).eq('status', 'novo');
@@ -96,9 +96,10 @@
   };
   /* garante os dois adicionais separados na tabela de preços (mesmo se o SQL não tiver rodado) */
   const ensurePrices = async () => {
-    const need = ['Adicional Pets', 'Adicional Manchas'].filter((k) => !(k in P.extra));
+    const EXTRA_PADRAO = { 'Adicional Pets': 0, 'Adicional Manchas': 0, 'Fidelidade: serviços para a meta': 4, 'Fidelidade: validade em meses': 24, 'Lembrete: ciclo padrão em meses': 6 };
+    const need = Object.keys(EXTRA_PADRAO).filter((k) => !(k in P.extra));
     if (!need.length) return;
-    await db.from('precos').upsert(need.map((chave) => ({ categoria: 'extra', chave, valor: 0 })), { onConflict: 'categoria,chave' });
+    await db.from('precos').upsert(need.map((chave) => ({ categoria: 'extra', chave, valor: EXTRA_PADRAO[chave] })), { onConflict: 'categoria,chave' });
     await loadPrices();
   };
   const GROUPS = { base: 'Preço base', bairro: 'Taxa de bairro', tecido: 'Adicional de tecido', extra: 'Extras e pagamento' };
@@ -176,7 +177,7 @@
   /* ---------- orçamentos: detalhe ---------- */
   const dlg = $('dlg'), body = $('dlgBody');
   const closeDlg = () => { if (dlg.close) dlg.close(); else dlg.removeAttribute('open'); loadOrc(); };
-  dlg.addEventListener('close', () => { if (!$('app').hidden) loadOrc(); });
+  dlg.addEventListener('close', () => { if (!$('app').hidden) { if (!$('tab-cl').hidden) loadClientes(); else if (!$('tab-ag').hidden) loadAgenda(); else loadOrc(); } });
   const signed = async (bucket, path, secs = 3600) => { const { data } = await db.storage.from(bucket).createSignedUrl(path, secs); return data ? data.signedUrl : null; };
   const isVideo = (p) => /\.(mp4|mov|webm)$/i.test(p);
 
@@ -197,6 +198,7 @@
     const totalOut = el('b', { text: brl(0) }), payBox = el('div', { class: 'hint' });
     const status = el('select', {}, ...Object.keys(STATUS).slice(0, 6).map((s) => el('option', { value: s, text: STATUS[s], selected: s === (o.status === 'novo' ? 'em_analise' : o.status) })));
     const obs = el('textarea', { rows: 2, maxlength: 400, placeholder: 'Aparece no PDF (ex.: prazo, condições)' }); obs.value = o.observacoes || '';
+    const dataServ = el('input', { type: 'date', value: o.concluido_em || '' });
     const sum = () => ['preco_base', 'taxa_bairro', 'adicional_tecido', 'adicional_pet', 'adicional_manchas', 'outros'].reduce((s, k) => s + num(f[k].value), 0) - num(f.desconto.value);
     function recalc() { f.preco_base.value = numIn(itemIn.reduce((s, i) => s + num(i.value), 0)); const t = Math.max(0, sum()); totalOut.textContent = brl(t); const p = pay(t); payBox.textContent = 'À vista (Pix ou dinheiro)' + (p.pixPct ? ' com ' + p.pixPct + '% de desconto' : '') + ': ' + brl(p.pix) + ' · Cartão até 3x de ' + brl(p.parcela); }
     const photos = el('div', { class: 'photos' });
@@ -226,8 +228,8 @@
     const googleBtn = el('a', { class: 'btn star', href: googleOk ? GOOGLE_REVIEW_URL : '#', target: '_blank', rel: 'noopener', text: '\u2B50 Pedir Avaliação no Google',
       onclick: (e) => { if (!googleOk) { e.preventDefault(); alert('Cole o link de avaliações do Google na constante GOOGLE_REVIEW_URL, no início do arquivo admin.js.'); } } });
 
-    const values = () => ({ itens: itens.map((it, i) => ({ ...it, valor: num(itemIn[i].value) })), preco_base: itemIn.reduce((s, i) => s + num(i.value), 0), taxa_bairro: num(f.taxa_bairro.value), adicional_tecido: num(f.adicional_tecido.value), adicional_pet: num(f.adicional_pet.value), adicional_manchas: num(f.adicional_manchas.value), outros: num(f.outros.value), desconto: num(f.desconto.value), total: Math.max(0, Math.round(sum() * 100) / 100), status: status.value, observacoes: obs.value.trim() || null, atualizado_em: new Date().toISOString() });
-    const save = async (quiet) => { const { error } = await db.from('orcamentos').update(values()).eq('id', o.id); if (error) { msg(note, 'Não foi possível salvar. Confira se o SQL "supabase-atualizacao-3" foi executado no Supabase.'); return false; } if (!quiet) msg(note, 'Salvo!', true); return true; };
+    const values = () => ({ itens: itens.map((it, i) => ({ ...it, valor: num(itemIn[i].value) })), preco_base: itemIn.reduce((s, i) => s + num(i.value), 0), taxa_bairro: num(f.taxa_bairro.value), adicional_tecido: num(f.adicional_tecido.value), adicional_pet: num(f.adicional_pet.value), adicional_manchas: num(f.adicional_manchas.value), outros: num(f.outros.value), desconto: num(f.desconto.value), total: Math.max(0, Math.round(sum() * 100) / 100), status: status.value, concluido_em: status.value === 'concluido' ? (dataServ.value || today()) : null, observacoes: obs.value.trim() || null, atualizado_em: new Date().toISOString() });
+    const save = async (quiet) => { const { error } = await db.from('orcamentos').update(values()).eq('id', o.id); if (error) { msg(note, 'Não foi possível salvar. Confira se todos os SQLs de atualização (até o 5) foram executados no Supabase.'); return false; } if (!quiet) msg(note, 'Salvo!', true); return true; };
 
     const phone = (o.whatsapp || '').replace(/\D/g, '');
     const WA_TEXT = (nome) => 'Olá, ' + nome + '! Tudo bem?\nAqui é da FSA Clean! \u{1F9FC}\nJá preparamos o seu orçamento detalhado de higienização. Estou enviando em anexo o arquivo PDF com todos os valores e condições.\nQualquer dúvida estou à disposição!';
@@ -257,7 +259,7 @@
       btn.disabled = true; await save();
       const r = await db.from('financeiro_entradas').insert({ data: today(), descricao: ('Serviço - ' + o.nome + ' (' + orcResumo(o) + ')').slice(0, 120), valor, forma_pagamento: forma.trim() || null, orcamento_id: o.id });
       if (r.error) { btn.disabled = false; return msg(note, 'Não foi possível lançar no caixa.'); }
-      await db.from('orcamentos').update({ status: 'concluido' }).eq('id', o.id); status.value = 'concluido'; btn.disabled = false; msg(note, 'Entrada de ' + brl(valor) + ' lançada no caixa.', true);
+      dataServ.value = dataServ.value || today(); await db.from('orcamentos').update({ status: 'concluido', concluido_em: dataServ.value }).eq('id', o.id); status.value = 'concluido'; btn.disabled = false; msg(note, 'Entrada de ' + brl(valor) + ' lançada no caixa.', true);
     };
     const del = async () => {
       if (!confirm('Excluir este orçamento e as fotos enviadas? Não dá para desfazer.')) return;
@@ -283,13 +285,14 @@
         el('div', {}, el('span', { text: 'Possui manchas?' }), o.tem_manchas ? 'Sim' : 'Não'),
         (o.pets_manchas && !o.tem_pets && !o.tem_manchas) ? el('div', {}, el('span', { text: 'Pets/manchas (cadastro antigo)' }), 'Sim') : document.createComment('-'),
         el('div', {}, el('span', { text: 'Observações do cliente' }), o.detalhes || '—')),
+      o.cliente_id ? el('div', { class: 'actions' }, el('button', { class: 'btn ghost', type: 'button', text: 'Ver ficha do cliente (histórico e fidelidade)', onclick: () => openCliente(o.cliente_id) })) : document.createComment('-'),
       slotBox,
       (o.fotos || []).length ? photos : el('p', { class: 'hint', text: 'O cliente não enviou fotos ou vídeos.' }),
       el('h3', { text: 'Valores', style: 'font-size:1.05rem' }), missing,
       el('div', { class: 'span-all' }, el('span', { class: 'hint', text: itens.length > 1 ? 'Valor de cada item do pacote (a soma vira o preço base):' : 'Valor do serviço:', style: 'display:block;margin-bottom:6px' }), ...itens.map((it, i) => el('label', { style: 'margin-bottom:8px' }, itemLabel(it), itemIn[i]))),
       el('div', { class: 'calc' }, fld('taxa_bairro', 'Taxa do bairro'), fld('adicional_tecido', 'Adicional de tecido'), fld('adicional_pet', 'Adicional pets'), fld('adicional_manchas', 'Adicional manchas'), fld('outros', 'Outros acréscimos'), fld('desconto', 'Desconto')),
       el('div', { class: 'total' }, el('span', { text: 'Subtotal dos serviços' }), totalOut), payBox,
-      el('div', { class: 'calc' }, el('label', {}, 'Status', status), el('label', {}, 'Observações (aparecem no PDF)', obs)),
+      el('div', { class: 'calc' }, el('label', {}, 'Status', status), el('label', {}, 'Data do serviço realizado', dataServ), el('label', { style: 'grid-column:1/-1' }, 'Observações (aparecem no PDF)', obs)),
       out, note, pdfLinks, el('div', { class: 'actions' }, waLink, googleBtn),
       el('div', { class: 'actions' }, el('button', { class: 'btn ok', type: 'button', text: 'Serviço concluído: lançar no caixa', onclick: (e) => toCash(e.currentTarget) }), el('button', { class: 'btn bad', type: 'button', text: 'Excluir', onclick: del })));
     recalc(); if (dlg.showModal) { if (!dlg.open) dlg.showModal(); } else dlg.setAttribute('open', '');
@@ -483,6 +486,127 @@
     if (error || !data.length) return msg(e, 'A semana anterior não tem horários para repetir.');
     agSave(data.map((h) => ({ data: addDays(h.data, 7), inicio: h.inicio, fim: h.fim })).filter((r) => futuro(r.data, r.inicio)), 'horário(s) copiado(s) da semana anterior.');
   });
+
+  /* ---------- CRM: clientes, recorrência, lembretes e fidelidade ---------- */
+  const CUPOM_RETORNO = '';   /* opcional, ex.: 'Use o cupom VOLTA10 no próximo serviço.' (escolha um desconto que preserve a margem) */
+  const CRM_MSG = {
+    lembrete: 'Olá, {nome}! Tudo bem?\nAqui é da FSA Clean! \u{1F9FC}\nJá faz {tempo} desde a última higienização do seu estofado. Que tal agendar a manutenção preventiva? Para quem já é cliente temos condições especiais.{cupom}\nÉ só responder aqui que combinamos o melhor dia e horário!',
+    quase: 'Olá, {nome}! Tudo bem?\nAqui é da FSA Clean! \u{1F9FC}\nFalta só 1 serviço para você completar o Cartão Fidelidade e liberar uma Super Oferta exclusiva! \u2B50\nQuer agendar o próximo? É só responder aqui!',
+    meta: 'Olá, {nome}! Tudo bem?\nAqui é da FSA Clean! \u{1F9FC}\nParabéns! Você completou {meta} serviços e liberou uma Super Oferta exclusiva do Cartão Fidelidade! \u{1F389}\nResponda aqui que explicamos como resgatar.'
+  };
+  const ST_CLI = { novo: 'novo', ativo: 'aprovado', pendente: 'pendente' }, LBL_CLI = { novo: 'Novo', ativo: 'Ativo', pendente: 'Pendente de retorno' };
+  const addMonths = (s, n) => { const d = pd(s), dia = d.getDate(); d.setMonth(d.getMonth() + n); if (d.getDate() !== dia) d.setDate(0); return ds(d); };
+  const mesesAtras = (s) => { const d = Math.round((pd(today()) - pd(s)) / 86400000); return d < 45 ? d + ' dia(s)' : d < 700 ? Math.round(d / 30.4) + ' mês(es)' : (d / 365).toFixed(1).replace('.', ',') + ' ano(s)'; };
+  const dataBR = (s) => fmtDate(String(s).slice(0, 10) + 'T12:00:00');
+  const telFull = (w) => { const d = String(w || '').replace(/\D/g, ''); return d.length <= 11 ? '55' + d : d; };
+  let crm = { cs: [], by: {}, st: {} };
+  const crmCfg = () => ({ meta: P.extra['Fidelidade: serviços para a meta'] || 4, validade: P.extra['Fidelidade: validade em meses'] || 24, ciclo: P.extra['Lembrete: ciclo padrão em meses'] || 6 });
+  const statCli = (c, ords) => {
+    const k = crmCfg(), done = ords.filter((o) => o.status === 'concluido' && o.concluido_em).sort((a, b) => (a.concluido_em < b.concluido_em ? 1 : -1));
+    const last = done[0] ? done[0].concluido_em : null, ciclo = c.ciclo_meses || k.ciclo, proximo = last ? addMonths(last, ciclo) : null;
+    const status = !done.length ? 'novo' : (proximo <= today() ? 'pendente' : 'ativo'), ini = addMonths(today(), -k.validade);
+    const fid = done.filter((o) => o.concluido_em >= ini && (!c.fidelidade_resgatada_em || o.concluido_em > c.fidelidade_resgatada_em)).length;
+    return { done, last, ciclo, proximo, status, fid, meta: k.meta, validade: k.validade,
+      devido: !!(c.lembretes_ativos && status === 'pendente' && (!c.ultimo_lembrete_em || c.ultimo_lembrete_em.slice(0, 10) < proximo)),
+      atingiu: fid >= k.meta, quase: k.meta > 1 && fid === k.meta - 1 };
+  };
+  const msgCrm = (k, c, s) => CRM_MSG[k].replace(/\{nome\}/g, c.nome.split(' ')[0]).replace('{tempo}', s.last ? mesesAtras(s.last) : 'um tempo').replace('{meta}', s.meta).replace('{cupom}', CUPOM_RETORNO ? '\n' + CUPOM_RETORNO : '');
+  const waCrm = (c, texto) => 'https://wa.me/' + telFull(c.whatsapp) + '?text=' + encodeURIComponent(texto);
+  const crmBadge = () => { const n = crm.cs.filter((c) => crm.st[c.id].devido || crm.st[c.id].atingiu).length; $('clCount').textContent = n; $('clCount').hidden = !n; };
+  const crmLoad = async () => {
+    const cs = await fetchAll(() => db.from('clientes').select('*').order('id'));
+    const os = await fetchAll(() => db.from('orcamentos').select('id,numero,cliente_id,status,concluido_em,created_at,total,tipo_estofado,quantidade,tamanho,itens,fotos').order('id'));
+    const by = {}, st = {}; os.forEach((o) => { if (o.cliente_id) (by[o.cliente_id] = by[o.cliente_id] || []).push(o); });
+    cs.forEach((c) => { st[c.id] = statCli(c, by[c.id] || []); });
+    crm = { cs, by, st }; crmBadge();
+  };
+  const FILTROS = { '': () => true, novo: (s) => s.status === 'novo', ativo: (s) => s.status === 'ativo', pendente: (s) => s.status === 'pendente', devido: (s) => s.devido, quase: (s) => s.quase, meta: (s) => s.atingiu };
+  async function loadClientes() {
+    const box = $('clList'); box.textContent = 'Carregando...';
+    try { await crmLoad(); } catch (e) { box.textContent = ''; return box.append(el('p', { class: 'err', text: 'Não foi possível carregar os clientes. Confira se o SQL "supabase-atualizacao-5" foi executado.' })); }
+    renderClientes();
+  }
+  function renderClientes() {
+    const q = norm($('clBusca').value), f = FILTROS[$('clFiltro').value || ''], box = $('clList'), cards = $('clCards');
+    box.textContent = ''; cards.textContent = '';
+    const cnt = (k) => crm.cs.filter((c) => FILTROS[k](crm.st[c.id])).length;
+    [['Clientes', crm.cs.length], ['Ativos', cnt('ativo')], ['Pendentes de retorno', cnt('pendente')], ['Lembretes para enviar', cnt('devido')], ['Falta 1 para a meta', cnt('quase')], ['Meta atingida', cnt('meta')]].forEach(([l, v]) => cards.append(el('div', { class: 'card' }, el('span', { text: l }), el('b', { text: String(v) }))));
+    const rows = crm.cs.filter((c) => f(crm.st[c.id]) && (!q || norm(c.nome + ' ' + c.whatsapp + ' ' + (c.bairro || '')).includes(q))).sort((a, b) => ((crm.st[a.id].last || '9999') < (crm.st[b.id].last || '9999') ? -1 : 1));
+    if (!rows.length) box.append(el('p', { class: 'muted', text: 'Nenhum cliente neste filtro.' }));
+    rows.forEach((c) => {
+      const s = crm.st[c.id];
+      box.append(el('div', { class: 'card item' + (s.atingiu ? ' cl-meta' : s.quase ? ' cl-quase' : ''), onclick: () => openCliente(c.id) },
+        el('div', {}, el('b', { text: c.nome }), el('span', { class: 'meta', text: [c.bairro || '—', s.last ? 'último serviço há ' + mesesAtras(s.last) : 'sem serviço concluído', (crm.by[c.id] || []).length + ' pedido(s)'].join(' · ') }),
+          s.atingiu ? el('div', { class: 'hint', style: 'color:#0a7a4a;font-weight:700', text: '\u{1F389} Meta atingida: libere a Super Oferta' }) : s.quase ? el('div', { class: 'hint', style: 'color:#8a5a00;font-weight:700', text: '\u2B50 Falta 1 serviço para completar o cartão fidelidade' }) : null),
+        el('div', { style: 'text-align:right' }, el('span', { class: 'st ' + ST_CLI[s.status], text: LBL_CLI[s.status] }), s.devido ? el('div', { class: 'hint', text: '\u{1F514} lembrete', style: 'margin-top:4px' }) : null)));
+    });
+  }
+  $('clBusca').addEventListener('input', renderClientes); $('clFiltro').addEventListener('change', renderClientes);
+  $('formCl').addEventListener('submit', async (ev) => {
+    ev.preventDefault(); const f = ev.target, e = $('clErr'); msg(e, '');
+    const dg = telFull(f.whatsapp.value);
+    if (f.nome.value.trim().length < 2) return msg(e, 'Informe o nome.');
+    if (!/^[0-9]{10,13}$/.test(dg)) return msg(e, 'Informe um WhatsApp válido, com DDD.');
+    const { error } = await db.from('clientes').insert({ nome: f.nome.value.trim(), whatsapp: dg });
+    if (error) return msg(e, /duplicate|unique/i.test(error.message || '') ? 'Já existe um cliente com esse WhatsApp.' : 'Não foi possível cadastrar.');
+    f.reset(); await crmLoad(); const c = crm.cs.find((x) => x.whatsapp === dg); renderClientes(); if (c) openCliente(c.id);
+  });
+
+  async function openCliente(id) {
+    await crmLoad(); const c = crm.cs.find((x) => x.id === id); if (!c) return alert('Cliente não encontrado.');
+    const ords = (crm.by[id] || []).slice().sort((a, b) => (a.created_at < b.created_at ? 1 : -1)), s = crm.st[id], note = el('p', { class: 'hint' });
+    const inp = (v, o = {}) => el('input', { value: v || '', ...o });
+    const n = inp(c.nome, { maxlength: 80 }), w = inp(c.whatsapp, { inputmode: 'tel' }), e = inp(c.endereco, { maxlength: 200, placeholder: 'Rua, número, complemento' }), b = inp(c.bairro, { maxlength: 80 }), loc = inp(c.localizacao_url, { maxlength: 300, placeholder: 'Cole o link do Google Maps (opcional)' });
+    const ob = el('textarea', { rows: 3, maxlength: 1000, placeholder: 'Anotações sobre o cliente' }); ob.value = c.observacoes || '';
+    const ciclo = inp(c.ciclo_meses || '', { type: 'number', min: 1, max: 36, placeholder: 'Padrão: ' + crmCfg().ciclo }), lem = el('input', { type: 'checkbox', style: 'width:auto' }); lem.checked = c.lembretes_ativos;
+    const mapa = () => loc.value.trim() || 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent([e.value, b.value, c.cidade].filter(Boolean).join(', '));
+    const salvar = async () => {
+      const dg = telFull(w.value);
+      if (n.value.trim().length < 2) return msg(note, 'Informe o nome.'); if (!/^[0-9]{10,13}$/.test(dg)) return msg(note, 'WhatsApp inválido.');
+      const { error } = await db.from('clientes').update({ nome: n.value.trim(), whatsapp: dg, endereco: e.value.trim() || null, bairro: b.value.trim() || null, localizacao_url: loc.value.trim() || null, observacoes: ob.value.trim() || null, ciclo_meses: ciclo.value ? Number(ciclo.value) : null, lembretes_ativos: lem.checked, atualizado_em: new Date().toISOString() }).eq('id', c.id);
+      if (error) return msg(note, /duplicate|unique/i.test(error.message || '') ? 'Já existe outro cliente com esse WhatsApp.' : 'Não foi possível salvar.');
+      msg(note, 'Dados salvos!', true);
+    };
+    const marcar = (campos) => db.from('clientes').update(campos).eq('id', c.id);
+    const stamps = el('div', { class: 'stamps' }, ...Array.from({ length: s.meta }, (_, i) => el('span', { class: 'stamp' + (i < s.fid ? ' on' : ''), text: i < s.fid ? '\u2713' : String(i + 1) })));
+    const fidBox = el('div', { class: 'sect' }, el('h3', { text: 'Cartão Fidelidade' }), stamps,
+      el('p', { class: 'hint', text: s.fid + ' de ' + s.meta + ' serviços (valem os últimos ' + s.validade + ' meses' + (c.fidelidade_resgatada_em ? ', contando após a recompensa de ' + dataBR(c.fidelidade_resgatada_em) : '') + ')' }));
+    if (s.atingiu) fidBox.append(el('p', { text: '\u{1F389} Meta atingida! Libere a Super Oferta / Recompensa Exclusiva.', style: 'color:#0a7a4a;font-weight:800;margin:0' }),
+      el('div', { class: 'actions' }, el('a', { class: 'btn ok', target: '_blank', rel: 'noopener', href: waCrm(c, msgCrm('meta', c, s)), text: 'Avisar no WhatsApp' }),
+        el('button', { class: 'btn', type: 'button', text: 'Recompensa entregue (reiniciar cartão)', onclick: async () => { if (!confirm('Marcar a recompensa como entregue? O cartão recomeça a contar a partir de hoje.')) return; await marcar({ fidelidade_resgatada_em: today() }); openCliente(id); } })));
+    else if (s.quase) fidBox.append(el('p', { text: '\u2B50 Falta 1 serviço para completar o cartão!', style: 'color:#8a5a00;font-weight:800;margin:0' }), el('div', { class: 'actions' }, el('a', { class: 'btn ok', target: '_blank', rel: 'noopener', href: waCrm(c, msgCrm('quase', c, s)), text: 'Avisar no WhatsApp' })));
+    const lemBox = el('div', { class: 'sect' }, el('h3', { text: 'Recorrência e lembretes' }),
+      el('div', { class: 'kv' }, el('div', {}, el('span', { text: 'Status' }), el('span', { class: 'st ' + ST_CLI[s.status], text: LBL_CLI[s.status], style: 'display:inline-block;text-transform:none;letter-spacing:0;font-size:.74rem' })),
+        el('div', {}, el('span', { text: 'Último serviço' }), s.last ? dataBR(s.last) + ' (há ' + mesesAtras(s.last) + ')' : '—'),
+        el('div', {}, el('span', { text: 'Próximo lembrete (ciclo de ' + s.ciclo + ' meses)' }), s.proximo ? dataBR(s.proximo) + (s.devido ? ' \u{1F514} vencido, enviar' : '') : '—'),
+        el('div', {}, el('span', { text: 'Último lembrete enviado' }), c.ultimo_lembrete_em ? dataBR(c.ultimo_lembrete_em) : 'nunca')));
+    lemBox.append(el('div', { class: 'actions' }, el('a', { class: 'btn ' + (s.devido ? 'ok' : 'ghost'), target: '_blank', rel: 'noopener', href: waCrm(c, msgCrm('lembrete', c, s)), text: 'Enviar lembrete no WhatsApp',
+      onclick: async () => { await marcar({ ultimo_lembrete_em: new Date().toISOString() }); } })));   /* registra o envio (a consulta só executa quando aguardada) */
+    const foto = ords.find((o) => (o.fotos || []).length), fotosBox = el('div', { class: 'photos' });
+    if (foto) db.storage.from('orcamentos-fotos').createSignedUrls(foto.fotos, 3600).then(({ data }) => (data || []).forEach((r, i) => { if (!r || !r.signedUrl) return; const p = foto.fotos[i] || ''; fotosBox.append(el('a', { href: r.signedUrl, target: '_blank', rel: 'noopener' }, isVideo(p) ? el('video', { src: r.signedUrl + '#t=0.1', muted: true, playsinline: true, preload: 'metadata' }) : el('img', { src: r.signedUrl, alt: 'Foto do estofado', loading: 'lazy' }))); }));
+    const hist = el('div', { class: 'sect' }, el('h3', { text: 'Histórico de serviços (' + ords.length + ')' }));
+    if (!ords.length) hist.append(el('p', { class: 'hint', text: 'Nenhum pedido ainda.' }));
+    ords.forEach((o) => hist.append(el('div', { class: 'row' }, el('div', {}, el('b', { text: '#ORC-' + (o.numero ? String(o.numero).padStart(4, '0') : o.id.slice(0, 6).toUpperCase()) + ' · ' + dataBR(o.concluido_em || o.created_at) }), el('div', { class: 'hint', text: orcResumo(o) + (o.total != null ? ' · ' + brl(o.total) : '') })),
+      el('div', { style: 'display:flex;gap:8px;align-items:center' }, el('span', { class: 'st ' + o.status, text: STATUS[o.status] }), el('button', { class: 'btn ghost small', type: 'button', text: 'Abrir / PDF', onclick: () => openOrc(o.id) })))));
+    const fd = el('input', { type: 'date', value: today() }), fdesc = inp('', { maxlength: 40, placeholder: 'Ex.: Sofá 3 lugares' }), fval = inp('', { inputmode: 'decimal', placeholder: '0,00' });
+    const antigo = el('details', {}, el('summary', { class: 'hint', style: 'cursor:pointer', text: '+ Registrar serviço já realizado (histórico anterior ao sistema)' }),
+      el('div', { class: 'form-grid', style: 'margin-top:10px' }, el('label', {}, 'Data do serviço', fd), el('label', {}, 'Valor (R$, opcional)', fval), el('label', { class: 'span2' }, 'O que foi feito', fdesc),
+        el('button', { class: 'btn ok span2', type: 'button', text: 'Registrar serviço', onclick: async () => {
+          if (!fd.value) return msg(note, 'Informe a data do serviço.'); if (fd.value > today()) return msg(note, 'A data não pode ser no futuro.');
+          const v = num(fval.value);
+          const { error } = await db.from('orcamentos').insert({ nome: c.nome, whatsapp: c.whatsapp, bairro: c.bairro || 'Não informado', tipo_estofado: (fdesc.value.trim() || 'Serviço anterior').slice(0, 40), tipo_tecido: 'N/A', status: 'concluido', concluido_em: fd.value, total: v || null, preco_base: v || null });
+          if (error) return msg(note, 'Não foi possível registrar. Confira se o SQL "supabase-atualizacao-5" foi executado.');
+          openCliente(id); } })));
+    body.textContent = '';
+    body.append(el('div', { class: 'mhead' }, el('div', {}, el('h2', { text: c.nome }), el('span', { class: 'muted small', text: 'Cliente desde ' + dataBR(c.created_at) })), el('button', { class: 'x', type: 'button', 'aria-label': 'Fechar', text: '\u00d7', onclick: closeDlg })),
+      fidBox, lemBox,
+      el('div', { class: 'sect' }, el('h3', { text: 'Dados do cliente' }), el('div', { class: 'form-grid' }, el('label', {}, 'Nome completo', n), el('label', {}, 'WhatsApp', w), el('label', { class: 'span2' }, 'Endereço completo', e), el('label', {}, 'Bairro', b), el('label', {}, 'Link da localização', loc),
+        el('label', {}, 'Ciclo de lembrete (meses)', ciclo), el('label', { style: 'flex-direction:row;display:flex;align-items:center;gap:8px;align-self:end' }, lem, 'Enviar lembretes a este cliente'), el('label', { class: 'span2' }, 'Observações', ob)),
+        el('div', { class: 'actions' }, el('button', { class: 'btn', type: 'button', text: 'Salvar dados', onclick: salvar }), el('a', { class: 'btn ghost', target: '_blank', rel: 'noopener', text: 'Ver no mapa', onclick: (ev) => { ev.currentTarget.href = mapa(); } }), el('a', { class: 'btn ghost', target: '_blank', rel: 'noopener', text: 'Abrir WhatsApp', onclick: (ev) => { ev.currentTarget.href = 'https://wa.me/' + telFull(w.value); } })), note),
+      hist, antigo, ...(foto ? [el('div', { class: 'sect' }, el('h3', { text: 'Fotos do último atendimento com fotos' }), fotosBox)] : []),
+      el('div', { class: 'actions' }, el('button', { class: 'btn bad', type: 'button', text: 'Excluir cliente', onclick: async () => { if (!confirm('Excluir a ficha deste cliente? Os orçamentos continuam salvos, apenas sem vínculo.')) return; await db.from('clientes').delete().eq('id', c.id); closeDlg(); } })));
+    if (dlg.showModal) { if (!dlg.open) dlg.showModal(); } else dlg.setAttribute('open', '');
+  }
 
   /* ---------- caixa ---------- */
   const monthRange = () => { const [y, m] = ($('cxMonth').value || today().slice(0, 7)).split('-').map(Number); const a = y + '-' + String(m).padStart(2, '0') + '-01'; const nx = m === 12 ? (y + 1) + '-01-01' : y + '-' + String(m + 1).padStart(2, '0') + '-01'; return [a, nx]; };
